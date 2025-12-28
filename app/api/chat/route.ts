@@ -1,0 +1,182 @@
+import { anthropic } from '@ai-sdk/anthropic';
+import { streamText, APICallError } from 'ai';
+import { composeSystemPrompt, getBasePrompt } from '@/lib/prompts';
+
+export const maxDuration = 30;
+
+// Placeholder user ID until auth is wired up (must be valid UUID)
+const PLACEHOLDER_USER_ID = '00000000-0000-0000-0000-000000000001';
+
+// Message types for AI SDK v6
+interface UIMessagePart {
+  type: string;
+  text?: string;
+}
+
+interface UIMessage {
+  role: 'user' | 'assistant' | 'system';
+  parts?: UIMessagePart[];
+  content?: string;
+}
+
+interface SimpleMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+}
+
+// Convert UIMessage format (parts array) to simple message format
+const convertToSimpleMessages = (messages: UIMessage[]): SimpleMessage[] => {
+  return messages.map((msg) => {
+    // Extract text content from parts array (AI SDK v6 format)
+    let content: string;
+    if (msg.parts && Array.isArray(msg.parts)) {
+      content = msg.parts
+        .filter((part) => part.type === 'text' && part.text)
+        .map((part) => part.text)
+        .join('');
+    } else if (typeof msg.content === 'string') {
+      content = msg.content;
+    } else {
+      content = '';
+    }
+
+    return {
+      role: msg.role,
+      content,
+    };
+  });
+};
+
+export const POST = async (req: Request) => {
+  // Check for API key
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return new Response(
+      JSON.stringify({
+        error: 'Configuration error',
+        message: 'ANTHROPIC_API_KEY is not configured'
+      }),
+      {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      }
+    );
+  }
+
+  try {
+    const { messages } = await req.json();
+
+    if (!messages || !Array.isArray(messages)) {
+      return new Response(
+        JSON.stringify({
+          error: 'Invalid request',
+          message: 'messages array is required'
+        }),
+        {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        }
+      );
+    }
+
+    // Convert from UIMessage format to simple message format
+    const simpleMessages = convertToSimpleMessages(messages);
+
+    // Extract the last user message for context retrieval
+    const lastUserMessage = simpleMessages
+      .filter((m) => m.role === 'user')
+      .pop();
+    const queryText = lastUserMessage?.content ?? '';
+
+    // Compose system prompt with context retrieval
+    // Uses placeholder user ID until auth is wired up
+    // Falls back to base prompt if retrieval fails
+    let systemPrompt: string;
+    try {
+      const { systemPrompt: composedPrompt } = await composeSystemPrompt(
+        PLACEHOLDER_USER_ID,
+        queryText
+      );
+      systemPrompt = composedPrompt;
+    } catch (error) {
+      console.warn('[Chat] Prompt composition failed, using base prompt:', error);
+      systemPrompt = getBasePrompt();
+    }
+
+    const result = streamText({
+      model: anthropic('claude-sonnet-4-20250514'),
+      system: systemPrompt,
+      messages: simpleMessages,
+    });
+
+    return result.toUIMessageStreamResponse();
+  } catch (error) {
+    // Handle rate limits and API errors
+    if (error instanceof APICallError) {
+      const status = error.statusCode ?? 500;
+
+      if (status === 429) {
+        return new Response(
+          JSON.stringify({
+            error: 'Rate limited',
+            message: 'Too many requests. Please try again in a moment.'
+          }),
+          {
+            status: 429,
+            headers: { 'Content-Type': 'application/json' }
+          }
+        );
+      }
+
+      if (status === 401) {
+        return new Response(
+          JSON.stringify({
+            error: 'Authentication error',
+            message: 'Invalid API key'
+          }),
+          {
+            status: 401,
+            headers: { 'Content-Type': 'application/json' }
+          }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          error: 'API error',
+          message: error.message
+        }),
+        {
+          status,
+          headers: { 'Content-Type': 'application/json' }
+        }
+      );
+    }
+
+    // Handle JSON parse errors
+    if (error instanceof SyntaxError) {
+      return new Response(
+        JSON.stringify({
+          error: 'Invalid request',
+          message: 'Invalid JSON in request body'
+        }),
+        {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        }
+      );
+    }
+
+    // Generic error fallback
+    console.error('Chat API error:', error);
+    return new Response(
+      JSON.stringify({
+        error: 'Internal error',
+        message: 'An unexpected error occurred'
+      }),
+      {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      }
+    );
+  }
+};

@@ -1,0 +1,33 @@
+<svg width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Outer petals - lighter pink -->
+  <path d="M100 50 C120 50, 135 65, 135 85 C135 105, 120 120, 100 120 C80 120, 65 105, 65 85 C65 65, 80 50, 100 50" fill="#f9d5d9" opacity="0.8"/>
+
+  <!-- Middle petals - pastel pink -->
+  <ellipse cx="100" cy="90" rx="32" ry="28" fill="#f4a9b2" opacity="0.9" transform="rotate(-25 100 90)"/>
+  <ellipse cx="100" cy="90" rx="32" ry="28" fill="#f4a9b2" opacity="0.9" transform="rotate(25 100 90)"/>
+  <ellipse cx="100" cy="90" rx="28" ry="32" fill="#f4a9b2" opacity="0.9" transform="rotate(70 100 90)"/>
+  <ellipse cx="100" cy="90" rx="28" ry="32" fill="#f4a9b2" opacity="0.9" transform="rotate(-70 100 90)"/>
+
+  <!-- Center petals - deeper pink -->
+  <circle cx="100" cy="90" r="18" fill="#f09ba5"/>
+  <circle cx="100" cy="90" r="12" fill="#eb8794"/>
+
+  <!-- Inner center - warm apricot -->
+  <circle cx="100" cy="90" r="6" fill="#ffd4a3"/>
+
+  <!-- Stem -->
+  <path d="M100 120 Q95 145, 90 170" stroke="#8b9d7c" stroke-width="3" fill="none" stroke-linecap="round"/>
+
+  <!-- Leaf 1 -->
+  <ellipse cx="85" cy="140" rx="12" ry="20" fill="#a8c69f" transform="rotate(-35 85 140)"/>
+  <path d="M85 130 Q85 140, 85 150" stroke="#8b9d7c" stroke-width="1" fill="none"/>
+
+  <!-- Leaf 2 -->
+  <ellipse cx="92" cy="155" rx="10" ry="16" fill="#b5d4a8" transform="rotate(-20 92 155)"/>
+  <path d="M92 147 Q92 155, 92 163" stroke="#8b9d7c" stroke-width="1" fill="none"/>
+
+  <!-- Subtle texture lines on center -->
+  <path d="M100 84 Q102 87, 100 90" stroke="#f4a9b2" stroke-width="0.5" opacity="0.3" fill="none"/>
+  <path d="M94 87 Q97 89, 100 90" stroke="#f4a9b2" stroke-width="0.5" opacity="0.3" fill="none"/>
+  <path d="M106 87 Q103 89, 100 90" stroke="#f4a9b2" stroke-width="0.5" opacity="0.3" fill="none"/>
+</svg>
