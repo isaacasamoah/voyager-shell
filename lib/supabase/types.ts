@@ -85,7 +85,7 @@ export interface Database {
         Row: {
           id: string
           user_id: string
-          type: 'fact' | 'preference' | 'entity' | 'decision' | 'event'
+          type: 'fact' | 'preference' | 'entity' | 'decision' | 'event' | 'insight' | 'concept'
           content: string
           embedding: string | null // pgvector stored as string representation
           confidence: number
@@ -101,7 +101,7 @@ export interface Database {
         Insert: {
           id?: string
           user_id: string
-          type: 'fact' | 'preference' | 'entity' | 'decision' | 'event'
+          type: 'fact' | 'preference' | 'entity' | 'decision' | 'event' | 'insight' | 'concept'
           content: string
           embedding?: string | null // pgvector accepts string representation
           confidence?: number
@@ -117,7 +117,7 @@ export interface Database {
         Update: {
           id?: string
           user_id?: string
-          type?: 'fact' | 'preference' | 'entity' | 'decision' | 'event'
+          type?: 'fact' | 'preference' | 'entity' | 'decision' | 'event' | 'insight' | 'concept'
           content?: string
           embedding?: string | null
           confidence?: number
@@ -145,7 +145,7 @@ export interface Database {
         }
         Returns: {
           id: string
-          type: 'fact' | 'preference' | 'entity' | 'decision' | 'event'
+          type: 'fact' | 'preference' | 'entity' | 'decision' | 'event' | 'insight' | 'concept'
           content: string
           confidence: number
           importance: number
@@ -183,7 +183,7 @@ export type NewSession = Database['public']['Tables']['sessions']['Insert']
 export type NewMessage = Database['public']['Tables']['messages']['Insert']
 
 // Memory types (Slice 2)
-export type MemoryType = 'fact' | 'preference' | 'entity' | 'decision' | 'event'
+export type MemoryType = 'fact' | 'preference' | 'entity' | 'decision' | 'event' | 'insight' | 'concept'
 
 export type UserMemory = Database['public']['Tables']['user_memory']['Row']
 export type NewUserMemory = Database['public']['Tables']['user_memory']['Insert']

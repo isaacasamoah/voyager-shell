@@ -8,7 +8,7 @@
 // Core Types
 // -----------------------------------------------------------------------------
 
-export type MemoryType = 'fact' | 'preference' | 'entity' | 'summary' | 'insight'
+export type MemoryType = 'fact' | 'preference' | 'entity' | 'summary' | 'insight' | 'concept'
 
 export type EntityType = 'person' | 'project' | 'tool' | 'topic' | 'company'
 
@@ -222,6 +222,7 @@ export const formatMemoryForContext = (memory: UserMemory): string => {
     entity: `Entity (${memory.entity_type})`,
     summary: 'Summary',
     insight: 'Insight',
+    concept: 'Concept',
   }[memory.memory_type]
 
   const confidence = memory.confidence < 0.7 ? ' [uncertain]' : ''
@@ -244,8 +245,8 @@ export const formatMemoriesForPrompt = (memories: UserMemory[]): string => {
 
   const sections: string[] = []
 
-  // Order: entities first, then facts, preferences, insights, summaries
-  const typeOrder: MemoryType[] = ['entity', 'fact', 'preference', 'insight', 'summary']
+  // Order: entities first, then facts, preferences, concepts, insights, summaries
+  const typeOrder: MemoryType[] = ['entity', 'fact', 'preference', 'concept', 'insight', 'summary']
 
   for (const type of typeOrder) {
     const items = grouped[type]
@@ -255,6 +256,7 @@ export const formatMemoriesForPrompt = (memories: UserMemory[]): string => {
       entity: '## Known Entities',
       fact: '## Facts About User',
       preference: '## User Preferences',
+      concept: '## Mental Models & Frameworks',
       insight: '## Observed Patterns',
       summary: '## Conversation Context',
     }[type]

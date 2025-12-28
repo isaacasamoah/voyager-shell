@@ -27,19 +27,27 @@ const EXTRACTION_PROMPT = `You are a memory extraction agent for Voyager, a pers
 Analyze this conversation and extract memories worth keeping for future conversations.
 
 MEMORY TYPES:
+
+**Operational (about the user):**
 - fact: Factual information about the user (e.g., "Isaac works at Acme Corp", "Lives in Melbourne")
 - preference: User preferences and working style (e.g., "Prefers concise responses", "Likes bullet points")
 - entity: Named things the user cares about (e.g., "Project Voyager", "Team member Sarah")
 - decision: Decisions made (e.g., "Chose React over Vue", "Budget set to $50K")
 - event: Time-based events (e.g., "Started new job in January", "Launch planned for Q1")
 
+**Domain Knowledge (ideas worth building on):**
+- insight: The reasoning or wisdom BEHIND a decision - the "why" (e.g., "Terminal-native maintains flow state because users don't context-switch", "Session-based is lower commitment so easier to test")
+- concept: Mental models, frameworks, or distinctions worth remembering (e.g., "Session-based vs persistent workspaces serve different collaboration patterns", "The progression: coding with Claude → clauding with Voyager → voyaging with Voyagers")
+
 EXTRACTION RULES:
-1. Only extract information that would be useful in FUTURE conversations
-2. Be specific - "likes concise responses" is better than "has preferences"
-3. Avoid extracting temporary/contextual info (e.g., "currently debugging X")
-4. Score importance 0.5-1.0 based on how useful this is long-term
+1. Only extract information useful in FUTURE conversations
+2. Be specific and preserve the richness of ideas
+3. Avoid temporary/contextual info (e.g., "currently debugging X")
+4. Score importance 0.5-1.0 based on long-term usefulness
 5. If nothing worth remembering, return empty memories array
-6. Maximum 5 memories per conversation (prioritize most important)
+6. Maximum 8 memories per conversation (prioritize most important)
+7. PRIORITIZE insights and concepts - don't just extract decisions, extract the REASONING
+8. For rich design conversations, capture metaphors, frameworks, and patterns discussed
 
 CONVERSATION:
 {conversation}
@@ -48,8 +56,8 @@ Respond with JSON matching this schema:
 {
   "memories": [
     {
-      "type": "fact|preference|entity|decision|event",
-      "content": "The memory content, written as a statement about the user",
+      "type": "fact|preference|entity|decision|event|insight|concept",
+      "content": "The memory content - for insights/concepts, preserve the full richness of the idea",
       "importance": 0.5-1.0,
       "reasoning": "Why this is worth remembering"
     }

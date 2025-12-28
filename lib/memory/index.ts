@@ -365,7 +365,7 @@ export const getMemoryStats = async (
   if (error || !data) {
     return {
       total: 0,
-      byType: { fact: 0, preference: 0, entity: 0, decision: 0, event: 0 },
+      byType: { fact: 0, preference: 0, entity: 0, decision: 0, event: 0, insight: 0, concept: 0 },
       avgImportance: 0,
     }
   }
@@ -381,7 +381,7 @@ export const getMemoryStats = async (
       acc[m.type] = (acc[m.type] || 0) + 1
       return acc
     },
-    { fact: 0, preference: 0, entity: 0, decision: 0, event: 0 } as Record<
+    { fact: 0, preference: 0, entity: 0, decision: 0, event: 0, insight: 0, concept: 0 } as Record<
       MemoryType,
       number
     >
