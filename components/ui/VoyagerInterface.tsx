@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import { Terminal, Activity } from 'lucide-react';
@@ -43,20 +43,107 @@ interface VoyagerInterfaceProps {
   className?: string;
 }
 
-const COMMAND_HINTS = ['/catch-up', '/standup', '/draft', '/wrap'];
+const COMMAND_HINTS = ['/catch-up', '/standup', '/draft', '/wrap', '/new', '/resume'];
 
-// Create a transport that communicates with our API
-const transport = new DefaultChatTransport({
-  api: '/api/chat',
+// API response types
+interface ConversationData {
+  id: string;
+  title: string | null;
+  status: string;
+  messageCount: number;
+  lastMessageAt: string;
+  createdAt: string;
+}
+
+interface MessageData {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+}
+
+interface ConversationResponse {
+  conversation: ConversationData;
+  messages: MessageData[];
+}
+
+interface ResumableConversation {
+  id: string;
+  title: string | null;
+  status: string;
+  messageCount: number;
+  lastMessageAt: string;
+  createdAt: string;
+  preview: string | null;
+}
+
+interface ResumableResponse {
+  conversations: ResumableConversation[];
+}
+
+// Convert API message to UIMessage format for useChat
+const apiMessageToUIMessage = (msg: MessageData): UIMessage => ({
+  id: msg.id,
+  role: msg.role,
+  parts: [{ type: 'text' as const, text: msg.content }],
 });
 
 export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [inputValue, setInputValue] = useState('');
 
-  const { messages, sendMessage, status, error } = useChat({
+  // Conversation state
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [conversationTitle, setConversationTitle] = useState<string | null>(null);
+  const [isLoadingConversation, setIsLoadingConversation] = useState(true);
+
+  // Resume picker state
+  const [showResumePicker, setShowResumePicker] = useState(false);
+  const [resumableConversations, setResumableConversations] = useState<ResumableConversation[]>([]);
+  const [isLoadingResumable, setIsLoadingResumable] = useState(false);
+
+  // Ref to track current conversationId for the transport
+  const conversationIdRef = useRef<string | null>(null);
+  conversationIdRef.current = conversationId;
+
+  // Create transport with dynamic body that reads current conversationId
+  const transport = useMemo(() => new DefaultChatTransport({
+    api: '/api/chat',
+    body: () => ({ conversationId: conversationIdRef.current }),
+  }), []);
+
+  // useChat with transport
+  const { messages, sendMessage, setMessages, status, error } = useChat({
     transport,
   });
+
+  // Auto-continue: fetch active conversation on mount
+  useEffect(() => {
+    const fetchActiveConversation = async () => {
+      try {
+        const res = await fetch('/api/conversation');
+        if (!res.ok) throw new Error('Failed to fetch conversation');
+
+        const data: ConversationResponse = await res.json();
+        setConversationId(data.conversation.id);
+        setConversationTitle(data.conversation.title);
+
+        // Hydrate messages if any exist
+        if (data.messages.length > 0) {
+          const uiMessages = data.messages.map(apiMessageToUIMessage);
+          setMessages(uiMessages);
+        }
+
+        console.log('[Voyager] Loaded conversation:', data.conversation.id);
+      } catch (error) {
+        console.error('[Voyager] Failed to fetch conversation:', error);
+      } finally {
+        setIsLoadingConversation(false);
+      }
+    };
+
+    fetchActiveConversation();
+  }, [setMessages]);
 
   // Derived state for loading
   const isLoading = status === 'submitted' || status === 'streaming';
@@ -100,6 +187,94 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   // State for wrap command feedback
   const [wrapMessage, setWrapMessage] = useState<string | null>(null);
 
+  // Handle /new command - create new conversation
+  const handleNewConversation = async () => {
+    try {
+      // Trigger extraction for current conversation before creating new
+      if (messages.length >= 2 && !extractedRef.current) {
+        extractedRef.current = true;
+        triggerExtraction(messages);
+      }
+
+      const res = await fetch('/api/conversation', { method: 'POST' });
+      if (!res.ok) throw new Error('Failed to create new conversation');
+
+      const data: ConversationResponse = await res.json();
+      setConversationId(data.conversation.id);
+      setConversationTitle(data.conversation.title);
+      setMessages([]);
+      extractedRef.current = false; // Reset extraction flag for new conversation
+
+      setWrapMessage('New conversation started.');
+      setTimeout(() => setWrapMessage(null), 2000);
+      console.log('[Voyager] Created new conversation:', data.conversation.id);
+    } catch (error) {
+      console.error('[Voyager] Failed to create new conversation:', error);
+      setWrapMessage('Failed to start new conversation.');
+      setTimeout(() => setWrapMessage(null), 3000);
+    }
+  };
+
+  // Handle /resume command - show picker or resume specific conversation
+  const handleResume = async () => {
+    setIsLoadingResumable(true);
+    setShowResumePicker(true);
+
+    try {
+      const res = await fetch('/api/conversation/resume?limit=10');
+      if (!res.ok) throw new Error('Failed to fetch resumable conversations');
+
+      const data: ResumableResponse = await res.json();
+      setResumableConversations(data.conversations);
+    } catch (error) {
+      console.error('[Voyager] Failed to fetch resumable conversations:', error);
+      setWrapMessage('Failed to load conversations.');
+      setTimeout(() => setWrapMessage(null), 3000);
+      setShowResumePicker(false);
+    } finally {
+      setIsLoadingResumable(false);
+    }
+  };
+
+  // Resume a specific conversation
+  const handleResumeConversation = async (targetId: string) => {
+    try {
+      // Trigger extraction for current conversation before resuming
+      if (messages.length >= 2 && !extractedRef.current) {
+        extractedRef.current = true;
+        triggerExtraction(messages);
+      }
+
+      const res = await fetch('/api/conversation/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: targetId }),
+      });
+
+      if (!res.ok) throw new Error('Failed to resume conversation');
+
+      const data: ConversationResponse = await res.json();
+      setConversationId(data.conversation.id);
+      setConversationTitle(data.conversation.title);
+
+      // Hydrate messages
+      if (data.messages.length > 0) {
+        const uiMessages = data.messages.map(apiMessageToUIMessage);
+        setMessages(uiMessages);
+      } else {
+        setMessages([]);
+      }
+
+      extractedRef.current = false; // Reset extraction flag
+      setShowResumePicker(false);
+      console.log('[Voyager] Resumed conversation:', data.conversation.id);
+    } catch (error) {
+      console.error('[Voyager] Failed to resume conversation:', error);
+      setWrapMessage('Failed to resume conversation.');
+      setTimeout(() => setWrapMessage(null), 3000);
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const trimmed = inputValue.trim();
@@ -123,6 +298,24 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
       return;
     }
 
+    // Handle /new command - start new conversation
+    if (trimmed.toLowerCase() === '/new') {
+      setInputValue('');
+      handleNewConversation();
+      return;
+    }
+
+    // Handle /resume command - show conversation picker
+    if (trimmed.toLowerCase() === '/resume') {
+      setInputValue('');
+      handleResume();
+      return;
+    }
+
+    if (!conversationId) {
+      console.error('[Voyager] Cannot send - no conversation loaded');
+      return;
+    }
     sendMessage({ text: trimmed });
     setInputValue('');
   };
@@ -130,7 +323,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if (inputValue.trim() && !isLoading) {
+      if (inputValue.trim() && !isLoading && conversationId) {
         sendMessage({ text: inputValue.trim() });
         setInputValue('');
       }
@@ -184,7 +377,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
           {/* Context Chips */}
           <div className="flex gap-2">
             <div className="px-2 py-1 rounded-sm border border-indigo-500/30 bg-indigo-500/10 text-indigo-300 text-xs flex items-center gap-2 cursor-pointer hover:bg-indigo-500/20 transition shadow-[0_0_10px_rgba(99,102,241,0.1)]">
-              <span className="opacity-50 font-semibold">$CTX:</span> VOYAGER_V2
+              <span className="opacity-50 font-semibold">$CTX:</span> {conversationTitle || 'VOYAGER_V2'}
             </div>
           </div>
         </div>
@@ -198,8 +391,21 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
       {/* THE STREAM */}
       <div className="max-w-2xl mx-auto px-4 py-8 space-y-12 pb-48">
 
+        {/* Loading conversation state */}
+        {isLoadingConversation && (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <AstronautState state="searching" size="lg" />
+            <div className="mt-6 space-y-2">
+              <h2 className="text-lg text-slate-400 font-bold animate-pulse">Loading...</h2>
+              <p className="text-slate-600 text-sm">
+                Fetching your conversation
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Welcome state when no messages */}
-        {messages.length === 0 && !isLoading && (
+        {!isLoadingConversation && messages.length === 0 && !isLoading && (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <AstronautState state="idle" size="lg" />
             <div className="mt-6 space-y-2">
@@ -287,11 +493,62 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
         {wrapMessage && (
           <div className="flex gap-4">
             <div className="w-12 pt-1 text-right text-green-500/50 text-[10px] font-bold tracking-widest">
-              WRAP
+              SYS
             </div>
             <div className="flex-1">
               <div className="text-green-400 text-sm p-3 border border-green-500/30 bg-green-500/10 rounded-sm">
                 {wrapMessage}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Resume Picker */}
+        {showResumePicker && (
+          <div className="flex gap-4">
+            <div className="w-12 pt-1 text-right text-indigo-500/50 text-[10px] font-bold tracking-widest">
+              PICK
+            </div>
+            <div className="flex-1">
+              <div className="border border-indigo-500/30 bg-indigo-500/5 rounded-sm overflow-hidden">
+                <div className="px-3 py-2 border-b border-indigo-500/20 flex items-center justify-between">
+                  <span className="text-indigo-300 text-xs font-bold">Select conversation to resume</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowResumePicker(false)}
+                    className="text-slate-500 hover:text-slate-300 text-xs"
+                  >
+                    [ESC]
+                  </button>
+                </div>
+                {isLoadingResumable ? (
+                  <div className="px-3 py-4 text-slate-500 text-xs">Loading conversations...</div>
+                ) : resumableConversations.length === 0 ? (
+                  <div className="px-3 py-4 text-slate-500 text-xs">No previous conversations found.</div>
+                ) : (
+                  <div className="divide-y divide-indigo-500/10 max-h-64 overflow-y-auto">
+                    {resumableConversations.map((conv) => (
+                      <button
+                        key={conv.id}
+                        type="button"
+                        onClick={() => handleResumeConversation(conv.id)}
+                        className="w-full px-3 py-2 text-left hover:bg-indigo-500/10 transition-colors"
+                      >
+                        <div className="text-slate-300 text-sm">
+                          {conv.title || 'Untitled conversation'}
+                        </div>
+                        {conv.preview && (
+                          <div className="text-slate-500 text-xs mt-0.5 truncate">
+                            {conv.preview}
+                          </div>
+                        )}
+                        <div className="text-slate-600 text-[10px] mt-1">
+                          {conv.messageCount} messages - {new Date(conv.lastMessageAt).toLocaleDateString()}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>

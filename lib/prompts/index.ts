@@ -1,115 +1,137 @@
-// Prompt composition service for Slice 2
-// Builds layered system prompts with context injection
+// Modular prompt composition service
+// Layered system: Core → Voyage → User → Tools → Context
+// DSPy-compatible: pure functions, structured data
 
 import { retrieveContext, type RetrievalResult } from '@/lib/retrieval';
-import type { PersonalizationSettings } from '@/types/retrieval';
+import { getPinnedKnowledge, type KnowledgeNode } from '@/lib/knowledge';
+
+// Re-export types
+export * from './types';
+
+// Re-export core prompt
+export { CORE_PROMPT, CORE_PROMPT_TOKENS } from './core';
+
+// Re-export defaults
+export {
+  DEFAULT_VOYAGE_CONFIG,
+  DEFAULT_USER_PROFILE,
+  DEFAULT_COMPOSER_OPTIONS,
+  VOYAGE_PRESET_ENGINEERING,
+  VOYAGE_PRESET_CREATIVE,
+  VOYAGE_PRESET_ENTERPRISE,
+  mergeVoyageConfig,
+  mergeUserProfile,
+} from './defaults';
+
+// Re-export formatters
+export * from './format';
+
+// Re-export composer
+export {
+  composePrompt,
+  composeMinimalPrompt,
+  composeFromDb,
+  debugPrompt,
+  type ComposeInput,
+  type ComposeFromDbInput,
+} from './compose';
+
+// Import for legacy compatibility
+import { composePrompt } from './compose';
+import { CORE_PROMPT } from './core';
+import { mergeUserProfile } from './defaults';
+import type { KnowledgeItem, RetrievedContext } from './types';
+
+// ============================================================================
+// LEGACY COMPATIBILITY LAYER
+// These functions maintain backward compatibility with existing chat route
+// ============================================================================
 
 export interface UserProfile {
   id: string;
   displayName?: string;
-  personalization?: PersonalizationSettings;
+  personalization?: {
+    tone?: 'concise' | 'detailed' | 'casual';
+    density?: 'minimal' | 'balanced' | 'comprehensive';
+  };
 }
 
-// Base system prompt (constitutional layer)
-const CONSTITUTIONAL_PROMPT = `You are Voyager, a collaboration co-pilot.
-
-"Voyager is your Jarvis. You are Ironman."
-
-## Identity
-
-You live in a terminal. You speak concisely, directly, like a sharp colleague who respects the user's time. Not sycophantic - honest and professional. You protect the user's attention.
-
-You are ONE intelligence with many faces - you know the user personally, remember their preferences, their projects, their people. When they mention something, you bring relevant context from wherever it lives.
-
-## Core Capabilities
-
-- **Memory**: You remember across sessions. Facts, preferences, decisions, context.
-- **Drafts**: You draft responses for human approval. Green tick to send.
-- **Context**: You surface what's relevant without being asked.
-- **Commands**: /today, /catch-up, /standup, /focus, /draft, /wrap
-
-## Interaction Style
-
-- Conversation is your interface. No navigation, just ask.
-- "What's happening with Project X?" → You surface context
-- "Get Jamie's take" → You know how to reach Jamie
-- Be the mutual friend who already knows both parties
-
-## Memory Awareness
-
-- You HAVE persistent memory. It appears in "Relevant Context from Memory" above.
-- When you use remembered info, weave it naturally: "I remember you decided..." or "From our discussion about..."
-- If asked about something not in memory: "I don't have that in memory" - NOT "I can't remember anything"
-- If memory context is provided, USE IT.
-
-## What You Don't Do
-
-- Interrupt with noise ("Sarah is also online!")
-- Share private context without consent
-- Guess at sensitive boundaries
-- Add fluff or unnecessary validation`;
-
-// Build personalization layer
-const buildPersonalizationPrompt = (profile?: UserProfile): string => {
-  if (!profile?.personalization) return '';
-
-  const { tone, density } = profile.personalization;
-  const lines: string[] = [];
-
-  if (tone === 'concise') lines.push('Keep responses brief and to the point.');
-  if (tone === 'detailed')
-    lines.push('Provide thorough explanations with examples.');
-  if (tone === 'casual') lines.push('Use a relaxed, conversational tone.');
-
-  if (density === 'minimal')
-    lines.push('Use bullet points. Avoid lengthy paragraphs.');
-  if (density === 'comprehensive')
-    lines.push('Be thorough. Include relevant details.');
-
-  return lines.length > 0
-    ? `\n## Communication Style\n${lines.join('\n')}`
-    : '';
-};
-
-// Build context usage instruction
-const buildContextInstruction = (hasMemories: boolean): string => {
-  if (!hasMemories) return '';
-
-  return `\n\n## Using Context
-When referencing information from memory above, naturally weave it into your response.
-Don't explicitly say "according to my memory" - just use the information naturally.`;
-};
-
-// Compose full system prompt with context
+/**
+ * Legacy compose function for backward compatibility.
+ * Uses the new modular system under the hood.
+ */
 export const composeSystemPrompt = async (
   userId: string,
   query: string,
   profile?: UserProfile
 ): Promise<{ systemPrompt: string; retrieval: RetrievalResult }> => {
-  // Retrieve relevant context
+  // Retrieve relevant context using existing retrieval system
   const retrieval = await retrieveContext(userId, query);
 
-  // Build prompt layers
-  let systemPrompt = CONSTITUTIONAL_PROMPT;
-
-  // Add personalization
-  systemPrompt += buildPersonalizationPrompt(profile);
-
-  // Add retrieved context
-  if (retrieval.context) {
-    systemPrompt += `\n\n${retrieval.context}`;
+  // Get pinned knowledge
+  let pinnedKnowledge: KnowledgeItem[] = [];
+  try {
+    const pinned = await getPinnedKnowledge(userId);
+    pinnedKnowledge = pinned.map((k: KnowledgeNode) => ({
+      id: k.eventId,
+      content: k.content,
+      source: 'pinned' as const,
+      relevance: 1.0,
+    }));
+  } catch (error) {
+    console.warn('[Prompts] Failed to get pinned knowledge:', error);
   }
 
-  // Add context usage instruction
-  systemPrompt += buildContextInstruction(retrieval.memories.length > 0);
+  // Convert retrieval to new format
+  const retrievedContext: RetrievedContext = {
+    items: retrieval.knowledge.map((k) => ({
+      id: k.eventId,
+      content: k.content,
+      source: 'personal' as const,
+      relevance: k.importance || 0.5,
+    })),
+    query,
+  };
 
-  return { systemPrompt, retrieval };
+  // Build user profile in new format
+  const userProfile = profile
+    ? mergeUserProfile(profile.id, {
+        displayName: profile.displayName,
+        communication: {
+          verbosity: profile.personalization?.tone === 'concise'
+            ? 'terse'
+            : profile.personalization?.tone === 'detailed'
+              ? 'detailed'
+              : 'balanced',
+          directness: 'balanced',
+          technicalLevel: 'intermediate',
+        },
+        interaction: {
+          confirmActions: true,
+          proactiveHelp: true,
+          showReasoning: false,
+        },
+        context: {},
+      })
+    : undefined;
+
+  // Compose using new modular system
+  const composed = composePrompt({
+    userId,
+    userProfile,
+    pinnedKnowledge,
+    retrievedContext,
+  });
+
+  return {
+    systemPrompt: composed.systemPrompt,
+    retrieval,
+  };
 };
 
-// Simple fallback prompt for unauthenticated users
+/**
+ * Legacy base prompt function for backward compatibility.
+ */
 export const getBasePrompt = (): string => {
-  return CONSTITUTIONAL_PROMPT;
+  return CORE_PROMPT;
 };
-
-// Export for testing
-export { CONSTITUTIONAL_PROMPT, buildPersonalizationPrompt };

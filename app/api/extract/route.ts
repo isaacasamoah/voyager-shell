@@ -16,6 +16,18 @@ interface ExtractRequest {
 }
 
 export const POST = async (req: Request) => {
+  // DEPRECATED: Old extraction system disabled
+  // Knowledge is now captured via knowledge_events in real-time
+  // This endpoint will be removed once new system is validated
+  console.log('[Extract API] Skipped - using new knowledge system')
+  return NextResponse.json({
+    stored: 0,
+    skipped: 0,
+    summary: 'Extraction disabled - using new knowledge event system',
+    deprecated: true,
+  })
+
+  /* OLD EXTRACTION CODE - TO BE REMOVED
   try {
     const body = await req.json() as ExtractRequest
 
@@ -64,4 +76,5 @@ export const POST = async (req: Request) => {
       { status: 500 }
     )
   }
+  END OF OLD EXTRACTION CODE */
 }

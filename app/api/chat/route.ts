@@ -1,8 +1,74 @@
 import { anthropic } from '@ai-sdk/anthropic';
 import { streamText, APICallError } from 'ai';
 import { composeSystemPrompt, getBasePrompt } from '@/lib/prompts';
+import {
+  saveMessage,
+  needsTitle,
+  setConversationTitle,
+  loadConversationMessages,
+} from '@/lib/conversation';
+import { callGeminiJSON } from '@/lib/gemini/client';
+import { emitMessageEvent } from '@/lib/knowledge';
 
 export const maxDuration = 30;
+
+// =============================================================================
+// Title Generation
+// =============================================================================
+
+interface TitleResponse {
+  title: string;
+}
+
+/**
+ * Generate a semantic title for a conversation using Gemini.
+ * Called async after the conversation has enough messages.
+ */
+const generateTitle = async (conversationId: string): Promise<string | null> => {
+  try {
+    // Load recent messages for context
+    const messages = await loadConversationMessages(conversationId, 10);
+    if (messages.length < 4) return null;
+
+    const transcript = messages
+      .map((m) => `${m.role}: ${m.content}`)
+      .join('\n\n');
+
+    const result = await callGeminiJSON<TitleResponse>({
+      systemPrompt: `You are a title generator. Create a brief, descriptive title (3-6 words) that captures the essence of this conversation. The title should be specific and meaningful, not generic.`,
+      userPrompt: `Generate a title for this conversation:\n\n${transcript}`,
+      temperature: 0.3,
+      maxTokens: 50,
+    });
+
+    return result.title || null;
+  } catch (error) {
+    console.error('[Chat] Title generation failed:', error);
+    return null;
+  }
+};
+
+/**
+ * Check if title is needed and generate one asynchronously.
+ * Fire-and-forget - does not block the response.
+ */
+const maybeGenerateTitle = (conversationId: string): void => {
+  // Fire-and-forget - don't await
+  needsTitle(conversationId)
+    .then(async (needs) => {
+      if (needs) {
+        console.log('[Chat] Generating title for conversation:', conversationId);
+        const title = await generateTitle(conversationId);
+        if (title) {
+          await setConversationTitle(conversationId, title);
+          console.log('[Chat] Title set:', title);
+        }
+      }
+    })
+    .catch((error) => {
+      console.error('[Chat] Title check failed:', error);
+    });
+};
 
 // Placeholder user ID until auth is wired up (must be valid UUID)
 const PLACEHOLDER_USER_ID = '00000000-0000-0000-0000-000000000001';
@@ -63,7 +129,7 @@ export const POST = async (req: Request) => {
   }
 
   try {
-    const { messages } = await req.json();
+    const { messages, conversationId } = await req.json();
 
     if (!messages || !Array.isArray(messages)) {
       return new Response(
@@ -87,6 +153,19 @@ export const POST = async (req: Request) => {
       .pop();
     const queryText = lastUserMessage?.content ?? '';
 
+    // Save user message to DB (fire-and-forget, don't block streaming)
+    if (conversationId && queryText) {
+      saveMessage(conversationId, 'user', queryText).catch((error) => {
+        console.error('[Chat] Failed to save user message:', error);
+      });
+
+      // Emit knowledge event (fire-and-forget)
+      // Messages ARE the knowledge — preserved exactly as source events
+      emitMessageEvent(conversationId, 'user', queryText, {
+        userId: PLACEHOLDER_USER_ID,
+      });
+    }
+
     // Compose system prompt with context retrieval
     // Uses placeholder user ID until auth is wired up
     // Falls back to base prompt if retrieval fails
@@ -106,6 +185,25 @@ export const POST = async (req: Request) => {
       model: anthropic('claude-sonnet-4-20250514'),
       system: systemPrompt,
       messages: simpleMessages,
+      onFinish: async ({ text }) => {
+        // Save assistant response after streaming completes
+        if (conversationId && text) {
+          try {
+            await saveMessage(conversationId, 'assistant', text);
+
+            // Emit knowledge event (fire-and-forget)
+            // Messages ARE the knowledge — preserved exactly as source events
+            emitMessageEvent(conversationId, 'assistant', text, {
+              userId: PLACEHOLDER_USER_ID,
+            });
+
+            // Check if title generation is needed (async, don't wait)
+            maybeGenerateTitle(conversationId);
+          } catch (error) {
+            console.error('[Chat] Failed to save assistant message:', error);
+          }
+        }
+      },
     });
 
     return result.toUIMessageStreamResponse();

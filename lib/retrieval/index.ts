@@ -1,23 +1,33 @@
-// Retrieval service for Slice 2
-// Handles context retrieval and formatting for prompt injection
+// Retrieval service for Slice 2 Phase 1
+// Uses event-sourced knowledge system
+//
+// Philosophy: "Curation is subtraction, not extraction"
+// - Messages ARE the knowledge (preserved exactly)
+// - Pinned items surface first
+// - Quieted items hidden by default
 
-import { searchMemories, type Memory } from '@/lib/memory';
-import type { QueryComplexity } from '@/types/retrieval';
+import {
+  searchKnowledge,
+  getPinnedKnowledge,
+  formatKnowledgeForPrompt,
+  type KnowledgeNode,
+} from '@/lib/knowledge';
 
 export interface RetrievalResult {
-  memories: (Memory & { similarity: number })[];
+  knowledge: KnowledgeNode[];
   context: string; // Formatted for prompt injection
   tokenEstimate: number;
 }
 
 export interface RetrievalOptions {
-  maxMemories?: number;
+  maxResults?: number;
   minRelevance?: number;
   maxTokens?: number;
+  voyageSlug?: string;
 }
 
 // Assess query complexity to determine retrieval depth
-const assessQueryComplexity = (query: string): QueryComplexity => {
+const assessQueryComplexity = (query: string): 'simple' | 'contextual' | 'complex' => {
   const lowercased = query.toLowerCase();
 
   // Simple queries need minimal context
@@ -51,9 +61,16 @@ const getRelevanceThreshold = (query: string): number => {
     lowercased.includes('did we decide') ||
     lowercased.includes('we discussed') ||
     lowercased.includes('we talked about') ||
-    lowercased.includes('you know about')
+    lowercased.includes('you know about') ||
+    lowercased.includes('what else') ||
+    lowercased.includes('other decisions') ||
+    lowercased.includes('insights') ||
+    lowercased.includes('concepts') ||
+    lowercased.includes('we learned') ||
+    lowercased.includes('from that conversation') ||
+    lowercased.includes('from that discussion')
   ) {
-    return 0.5;
+    return 0.35; // Lower for explicit memory probing - prefer recall over precision
   }
 
   const complexity = assessQueryComplexity(query);
@@ -67,46 +84,6 @@ const getRelevanceThreshold = (query: string): number => {
   }
 };
 
-// Format memories for prompt injection
-// Groups by type and formats as markdown
-const formatMemoriesForPrompt = (
-  memories: (Memory & { similarity: number })[]
-): string => {
-  if (memories.length === 0) return '';
-
-  const grouped = memories.reduce(
-    (acc, m) => {
-      if (!acc[m.type]) acc[m.type] = [];
-      acc[m.type].push(m);
-      return acc;
-    },
-    {} as Record<string, typeof memories>
-  );
-
-  let context = '## Relevant Context from Memory\n\n';
-
-  // Order by importance: facts first, then preferences, then others
-  const typeOrder = ['fact', 'preference', 'entity', 'decision', 'event'];
-  const sortedTypes = Object.keys(grouped).sort(
-    (a, b) => typeOrder.indexOf(a) - typeOrder.indexOf(b)
-  );
-
-  for (const type of sortedTypes) {
-    const items = grouped[type];
-    const typeLabel = type.charAt(0).toUpperCase() + type.slice(1) + 's';
-    context += `### ${typeLabel}\n`;
-
-    // Sort by importance within each group
-    const sortedItems = items.sort((a, b) => b.importance - a.importance);
-    for (const item of sortedItems) {
-      context += `- ${item.content}\n`;
-    }
-    context += '\n';
-  }
-
-  return context;
-};
-
 // Estimate tokens (rough: ~4 chars per token)
 const estimateTokens = (text: string): number => {
   return Math.ceil(text.length / 4);
@@ -118,40 +95,63 @@ export const retrieveContext = async (
   query: string,
   options: RetrievalOptions = {}
 ): Promise<RetrievalResult> => {
-  const { maxMemories = 15, maxTokens = 4000 } = options;
+  const { maxResults = 15, maxTokens = 4000, voyageSlug } = options;
 
   const minRelevance = options.minRelevance ?? getRelevanceThreshold(query);
 
   try {
     console.log(`[Retrieval] Query: "${query.slice(0, 50)}..." threshold: ${minRelevance}`);
 
-    // Search memories
-    const memories = await searchMemories(userId, query, {
+    // Get pinned knowledge first (always surface these)
+    const pinned = await getPinnedKnowledge(userId, voyageSlug);
+
+    // Search for relevant knowledge
+    const searchResults = await searchKnowledge(userId, query, {
       threshold: minRelevance,
-      limit: maxMemories,
+      limit: maxResults,
+      voyageSlug,
+      includeQuiet: false, // Respect curation
     });
 
-    console.log(`[Retrieval] Found ${memories.length} memories above threshold`);
-    if (memories.length > 0) {
-      memories.forEach(m => console.log(`  - [${m.type}] ${m.content.slice(0, 50)}... (sim: ${m.similarity.toFixed(3)})`));
+    // Combine: pinned first, then search results (dedupe)
+    const pinnedIds = new Set(pinned.map((p) => p.eventId));
+    const combined = [
+      ...pinned,
+      ...searchResults.filter((r) => !pinnedIds.has(r.eventId)),
+    ];
+
+    console.log(
+      `[Retrieval] Found ${pinned.length} pinned + ${searchResults.length} search results`
+    );
+    if (combined.length > 0 && combined.length <= 5) {
+      combined.forEach((k) =>
+        console.log(
+          `  - [${k.classifications[0] ?? 'message'}] ${k.content.slice(0, 50)}... (pinned: ${k.isPinned})`
+        )
+      );
     }
 
     // Format context
-    let context = formatMemoriesForPrompt(memories);
+    let context = formatKnowledgeForPrompt(combined);
     let tokenEstimate = estimateTokens(context);
 
-    // Trim if over token budget (remove lowest importance memories first)
-    const trimmedMemories = [...memories].sort(
-      (a, b) => b.importance - a.importance
-    );
-    while (tokenEstimate > maxTokens && trimmedMemories.length > 0) {
-      trimmedMemories.pop();
-      context = formatMemoriesForPrompt(trimmedMemories);
+    // Trim if over token budget (remove lowest importance, keep pinned)
+    const trimmed = [...combined].sort((a, b) => {
+      // Pinned always stay
+      if (a.isPinned && !b.isPinned) return -1;
+      if (!a.isPinned && b.isPinned) return 1;
+      // Then by importance
+      return b.importance - a.importance;
+    });
+
+    while (tokenEstimate > maxTokens && trimmed.length > pinned.length) {
+      trimmed.pop();
+      context = formatKnowledgeForPrompt(trimmed);
       tokenEstimate = estimateTokens(context);
     }
 
     return {
-      memories: trimmedMemories,
+      knowledge: trimmed,
       context,
       tokenEstimate,
     };
@@ -160,7 +160,7 @@ export const retrieveContext = async (
     // Don't break the chat experience
     console.error('[Retrieval] Error retrieving context:', error);
     return {
-      memories: [],
+      knowledge: [],
       context: '',
       tokenEstimate: 0,
     };
