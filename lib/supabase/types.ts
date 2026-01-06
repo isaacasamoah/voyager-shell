@@ -9,6 +9,54 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[]
 
+// Knowledge system types (matching 010_knowledge_events.sql)
+export type KnowledgeEventType =
+  // Source events — these contain THE ACTUAL KNOWLEDGE
+  | 'message'
+  | 'document'
+  | 'slack_message'
+  | 'jira_update'
+  | 'explicit'
+  // Attention events — curation by subtraction
+  | 'quieted'
+  | 'activated'
+  | 'pinned'
+  | 'unpinned'
+  | 'importance_changed'
+  // Understanding events — enrich, don't replace
+  | 'summary'
+  | 'connection'
+  | 'superseded'
+
+export type KnowledgeSourceType =
+  | 'conversation'
+  | 'slack'
+  | 'jira'
+  | 'document'
+  | 'explicit'
+
+export type KnowledgeClassification =
+  | 'fact'
+  | 'preference'
+  | 'decision'
+  | 'procedure'
+  | 'insight'
+  | 'entity'
+
+export interface KnowledgeSearchResult {
+  event_id: string
+  content: string
+  classifications: string[]
+  entities: string[]
+  topics: string[]
+  is_active: boolean
+  is_pinned: boolean
+  importance: number
+  connected_to: string[]
+  source_created_at: string
+  similarity: number
+}
+
 export interface Database {
   public: {
     Tables: {
@@ -131,6 +179,84 @@ export interface Database {
           is_active?: boolean
         }
       }
+      // Knowledge System (Event-Sourced) - Migration 010
+      knowledge_events: {
+        Row: {
+          id: string
+          sequence_num: number
+          user_id: string | null
+          voyage_slug: string | null
+          event_type: KnowledgeEventType
+          content: string | null
+          metadata: Json
+          source_type: KnowledgeSourceType | null
+          source_ref: Json | null
+          actor_id: string | null
+          actor_type: 'user' | 'voyager' | 'system' | 'pipeline'
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          sequence_num?: number
+          user_id?: string | null
+          voyage_slug?: string | null
+          event_type: KnowledgeEventType
+          content?: string | null
+          metadata?: Json
+          source_type?: KnowledgeSourceType | null
+          source_ref?: Json | null
+          actor_id?: string | null
+          actor_type?: 'user' | 'voyager' | 'system' | 'pipeline'
+          created_at?: string
+        }
+        Update: {
+          // Events are append-only, no updates allowed
+        }
+      }
+      knowledge_current: {
+        Row: {
+          event_id: string
+          user_id: string | null
+          voyage_slug: string | null
+          content: string
+          classifications: string[]
+          entities: string[]
+          topics: string[]
+          is_active: boolean
+          is_pinned: boolean
+          importance: number
+          connected_to: string[]
+          embedding: string | null
+          source_created_at: string
+          updated_at: string
+        }
+        Insert: {
+          // Managed by trigger, no direct inserts
+          event_id: string
+          user_id?: string | null
+          voyage_slug?: string | null
+          content: string
+          classifications?: string[]
+          entities?: string[]
+          topics?: string[]
+          is_active?: boolean
+          is_pinned?: boolean
+          importance?: number
+          connected_to?: string[]
+          embedding?: string | null
+          source_created_at: string
+          updated_at?: string
+        }
+        Update: {
+          // Managed by trigger
+          is_active?: boolean
+          is_pinned?: boolean
+          importance?: number
+          connected_to?: string[]
+          embedding?: string | null
+          updated_at?: string
+        }
+      }
     }
     Views: {
       [_ in never]: never
@@ -167,9 +293,114 @@ export interface Database {
         }
         Returns: string
       }
+      // Conversation continuity functions (Slice 3)
+      get_or_create_active_session: {
+        Args: {
+          p_user_id: string
+        }
+        Returns: string // UUID
+      }
+      transition_session: {
+        Args: {
+          p_session_id: string
+          p_new_status: 'active' | 'historical' | 'archived'
+        }
+        Returns: boolean
+      }
+      get_resumable_sessions: {
+        Args: {
+          p_user_id: string
+          p_limit?: number
+        }
+        Returns: {
+          id: string
+          title: string | null
+          status: 'active' | 'historical' | 'archived'
+          message_count: number
+          last_message_at: string
+          created_at: string
+          preview: string | null
+        }[]
+      }
+      resume_session: {
+        Args: {
+          p_session_id: string
+        }
+        Returns: boolean
+      }
+      mark_session_extracted: {
+        Args: {
+          p_session_id: string
+        }
+        Returns: boolean
+      }
+      set_session_title: {
+        Args: {
+          p_session_id: string
+          p_title: string
+        }
+        Returns: boolean
+      }
+      // Knowledge System Functions (Migration 010)
+      search_knowledge: {
+        Args: {
+          query_embedding: string // pgvector string format
+          p_user_id?: string | null
+          p_voyage_slug?: string | null
+          p_include_quiet?: boolean
+          p_classifications?: string[] | null
+          p_min_importance?: number
+          p_match_threshold?: number
+          p_match_count?: number
+        }
+        Returns: KnowledgeSearchResult[]
+      }
+      create_knowledge_event: {
+        Args: {
+          p_event_type: KnowledgeEventType
+          p_content: string
+          p_user_id?: string | null
+          p_voyage_slug?: string | null
+          p_metadata?: Json
+          p_source_type?: KnowledgeSourceType
+          p_source_ref?: Json | null
+          p_actor_id?: string | null
+        }
+        Returns: string // UUID
+      }
+      quiet_knowledge: {
+        Args: {
+          p_target_id: string
+          p_reason?: string | null
+        }
+        Returns: boolean
+      }
+      pin_knowledge: {
+        Args: {
+          p_target_id: string
+          p_reason?: string | null
+        }
+        Returns: boolean
+      }
+      update_knowledge_embedding: {
+        Args: {
+          p_event_id: string
+          p_embedding: string // pgvector string format
+        }
+        Returns: boolean
+      }
+      get_knowledge_pending_embedding: {
+        Args: {
+          p_limit?: number
+        }
+        Returns: {
+          event_id: string
+          content: string
+        }[]
+      }
     }
     Enums: {
-      [_ in never]: never
+      session_status: 'active' | 'historical' | 'archived'
     }
   }
 }
@@ -188,3 +419,35 @@ export type MemoryType = 'fact' | 'preference' | 'entity' | 'decision' | 'event'
 export type UserMemory = Database['public']['Tables']['user_memory']['Row']
 export type NewUserMemory = Database['public']['Tables']['user_memory']['Insert']
 export type UpdateUserMemory = Database['public']['Tables']['user_memory']['Update']
+
+// Session status enum (Slice 3: Conversation Continuity)
+export type SessionStatus = 'active' | 'historical' | 'archived'
+
+// Message role type
+export type MessageRole = 'user' | 'assistant' | 'system'
+
+// Extended session with new fields from migration 004
+export interface ExtendedSession {
+  id: string
+  user_id: string | null
+  title: string | null
+  status: SessionStatus
+  message_count: number
+  last_message_at: string
+  title_generated_at: string | null
+  extracted_at: string | null
+  community_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+// Resumable session result from get_resumable_sessions RPC
+export interface ResumableSession {
+  id: string
+  title: string | null
+  status: SessionStatus
+  message_count: number
+  last_message_at: string
+  created_at: string
+  preview: string | null
+}

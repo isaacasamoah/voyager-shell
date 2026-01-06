@@ -3,10 +3,10 @@
 import React, { useState } from 'react';
 import { Terminal, Check, X, Edit2, Search, Activity } from 'lucide-react';
 
-// ASSET PLACEHOLDERS (Replace with actual file paths)
+// Astronaut assets
 const ASSETS = {
-  astroTracer: "/images/voyager-searching.png", // The "Searching" Astronaut
-  astroTick: "/images/voyager-approved.png",    // The "Green Tick" Astronaut
+  astroTracer: "/images/astronaut/searching.png", // The "Searching" Astronaut
+  astroTick: "/images/astronaut/success.png",     // The "Success" Astronaut
 };
 
 interface VoyagerInterfaceProps {
