@@ -8,7 +8,8 @@ import {
   loadConversationMessages,
 } from '@/lib/conversation';
 import { callGeminiJSON } from '@/lib/gemini/client';
-import { emitMessageEvent } from '@/lib/knowledge';
+import { emitMessageEvent, type KnowledgeNode } from '@/lib/knowledge';
+import { logRetrievalEvent, logCitations } from '@/lib/retrieval';
 
 export const maxDuration = 30;
 
@@ -170,12 +171,31 @@ export const POST = async (req: Request) => {
     // Uses placeholder user ID until auth is wired up
     // Falls back to base prompt if retrieval fails
     let systemPrompt: string;
+    let retrievedKnowledge: KnowledgeNode[] = [];
+    let retrievalEventId: string | null = null;
+
     try {
-      const { systemPrompt: composedPrompt } = await composeSystemPrompt(
+      const { systemPrompt: composedPrompt, retrieval } = await composeSystemPrompt(
         PLACEHOLDER_USER_ID,
         queryText
       );
       systemPrompt = composedPrompt;
+      retrievedKnowledge = retrieval.knowledge;
+
+      // Log retrieval event (fire-and-forget)
+      logRetrievalEvent({
+        userId: PLACEHOLDER_USER_ID,
+        conversationId,
+        query: queryText,
+        nodesReturned: retrieval.knowledge,
+        threshold: retrieval.metadata.threshold,
+        pinnedCount: retrieval.metadata.pinnedCount,
+        searchCount: retrieval.metadata.searchCount,
+        latencyMs: retrieval.metadata.latencyMs,
+        tokensInContext: retrieval.tokenEstimate,
+      }).then((id) => {
+        retrievalEventId = id;
+      });
     } catch (error) {
       console.warn('[Chat] Prompt composition failed, using base prompt:', error);
       systemPrompt = getBasePrompt();
@@ -196,6 +216,10 @@ export const POST = async (req: Request) => {
             emitMessageEvent(conversationId, 'assistant', text, {
               userId: PLACEHOLDER_USER_ID,
             });
+
+            // Log citations (fire-and-forget)
+            // Detects which retrieved nodes were actually used in the response
+            logCitations(retrievalEventId, text, retrievedKnowledge);
 
             // Check if title generation is needed (async, don't wait)
             maybeGenerateTitle(conversationId);

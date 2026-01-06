@@ -17,6 +17,13 @@ export interface RetrievalResult {
   knowledge: KnowledgeNode[];
   context: string; // Formatted for prompt injection
   tokenEstimate: number;
+  // Metadata for logging
+  metadata: {
+    threshold: number;
+    pinnedCount: number;
+    searchCount: number;
+    latencyMs: number;
+  };
 }
 
 export interface RetrievalOptions {
@@ -95,6 +102,7 @@ export const retrieveContext = async (
   query: string,
   options: RetrievalOptions = {}
 ): Promise<RetrievalResult> => {
+  const startTime = Date.now();
   const { maxResults = 15, maxTokens = 4000, voyageSlug } = options;
 
   const minRelevance = options.minRelevance ?? getRelevanceThreshold(query);
@@ -150,10 +158,18 @@ export const retrieveContext = async (
       tokenEstimate = estimateTokens(context);
     }
 
+    const latencyMs = Date.now() - startTime;
+
     return {
       knowledge: trimmed,
       context,
       tokenEstimate,
+      metadata: {
+        threshold: minRelevance,
+        pinnedCount: pinned.length,
+        searchCount: searchResults.length,
+        latencyMs,
+      },
     };
   } catch (error) {
     // If retrieval fails, return empty result
@@ -163,9 +179,23 @@ export const retrieveContext = async (
       knowledge: [],
       context: '',
       tokenEstimate: 0,
+      metadata: {
+        threshold: minRelevance,
+        pinnedCount: 0,
+        searchCount: 0,
+        latencyMs: Date.now() - startTime,
+      },
     };
   }
 };
 
 // Export helpers for testing
 export { assessQueryComplexity, getRelevanceThreshold, estimateTokens };
+
+// Export logging utilities
+export {
+  logRetrievalEvent,
+  logCitations,
+  detectCitations,
+  type RetrievalEventInput,
+} from './logging';
