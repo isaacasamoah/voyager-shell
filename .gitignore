@@ -36,3 +36,11 @@ next-env.d.ts
 # prisma
 prisma/*.db
 prisma/*.db-journal
+
+# generated artifacts
+generated-images/
+claude-portraits/
+.claude-archive/
+
+# temporary notes
+claude-question-time.md
