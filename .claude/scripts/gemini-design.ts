@@ -1,19 +1,20 @@
-#!/usr/bin/env npx ts-node
+#!/usr/bin/env npx tsx
 
 /**
- * Gemini Design Agent
+ * Gemini UI Design Agent
  *
- * Calls Gemini Flash to generate retro console-style UI components.
+ * Generates Voyager UI components using Gemini Flash.
  * Used by the /design skill.
  *
- * Usage: npx ts-node gemini-design.ts <component_type> <context>
- *
- * Requires GEMINI_API_KEY environment variable.
+ * Usage: npx tsx gemini-design.ts <component_type> "<context>"
  */
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = "gemini-2.0-flash";
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+import { loadEnv } from "./lib/env";
+import { generateText } from "./lib/gemini";
+import { UI_DESIGN_SYSTEM_PROMPT } from "./lib/voyager-aesthetic";
+
+// Load environment
+loadEnv();
 
 interface DesignRequest {
   componentType: string;
@@ -28,50 +29,7 @@ interface DesignResponse {
   rawResponse: string;
 }
 
-const DESIGN_SYSTEM_PROMPT = `You are a UI designer specializing in retro console aesthetics with modern usability.
-
-VOYAGER DESIGN SYSTEM:
-
-Aesthetic Principles:
-- Console/terminal feel: monospace hints, command-line energy, typewriter rhythm
-- Retro computing: phosphor glow effects, CRT warmth, vintage computing nostalgia
-- Nautical touches: brass accents, maritime instrument inspiration, captain's quarters warmth
-- Beautiful details: subtle gradients, box-drawing characters (─│┌┐└┘├┤┬┴┼), ASCII art flourishes
-
-Color Palette:
-- Terminal Green: #33ff33 (primary actions, success states)
-- Amber Glow: #ffb000 (warnings, highlights, warmth)
-- Phosphor Blue: #00ffff (links, interactive elements)
-- Deep Ocean: #0a1628 (backgrounds, depth)
-- Brass: #b5a642 (accents, premium feel)
-- Parchment: #f4ecd8 (text backgrounds, cards)
-
-Typography:
-- Monospace for data, commands, code: 'JetBrains Mono', 'Fira Code', monospace
-- Clean sans for body text: 'Inter', system-ui
-- Optional display: 'Space Grotesk' for headers
-
-UI Patterns:
-- Borders: Use box-drawing characters or subtle 1px borders
-- Glow effects: Subtle drop-shadow with terminal-green or amber for focus states
-- Hover states: Slight brightness increase, optional scanline effect
-- Cards: Parchment background with subtle inset shadow, brass corner accents
-- Buttons: Terminal-style with bracket hints [ Action ] or solid with glow
-
-Technical Requirements:
-- React functional component with TypeScript
-- Tailwind CSS for styling (extend theme for custom colors)
-- Accessible (WCAG AA minimum)
-- Responsive (mobile-first)
-- Named exports only (no default exports)
-- Props interface defined above component
-- Arrow function components`;
-
-async function callGemini(request: DesignRequest): Promise<DesignResponse> {
-  if (!GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY environment variable not set");
-  }
-
+async function generateComponent(request: DesignRequest): Promise<DesignResponse> {
   const userPrompt = `Design a ${request.componentType} component for Voyager.
 
 CONTEXT:
@@ -91,37 +49,14 @@ Why you made these design choices, referencing the Voyager design system.
 ASCII art, box-drawing patterns, or SVG concepts that could enhance this component.
 
 ## VARIANTS
-If this component needs variants (sizes, states, themes), describe them.`;
+If this component needs variants (sizes, states, themes), describe them with code snippets.`;
 
-  const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: DESIGN_SYSTEM_PROMPT },
-            { text: userPrompt }
-          ]
-        }
-      ],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 8192,
-      }
-    }),
+  const result = await generateText(userPrompt, {
+    systemPrompt: UI_DESIGN_SYSTEM_PROMPT,
+    temperature: 0.7,
   });
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Gemini API error: ${response.status} - ${error}`);
-  }
-
-  const data = await response.json();
-  const rawResponse = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  const rawResponse = result.text;
 
   // Parse the structured response
   const componentCodeMatch = rawResponse.match(/## COMPONENT CODE\s*```tsx\s*([\s\S]*?)```/);
@@ -138,13 +73,33 @@ If this component needs variants (sizes, states, themes), describe them.`;
   };
 }
 
-async function main() {
+function printHelp(): void {
+  console.log(`
+🎨 Gemini UI Design Agent
+
+Usage:
+  npx tsx gemini-design.ts <component_type> "<context>"
+
+Examples:
+  npx tsx gemini-design.ts button "primary action for approving drafts"
+  npx tsx gemini-design.ts card "knowledge node preview"
+  npx tsx gemini-design.ts modal "confirmation dialog"
+  npx tsx gemini-design.ts element "loading spinner"
+  npx tsx gemini-design.ts interface "settings panel"
+
+The component type can be:
+  - button, card, modal, input, select, etc. (specific components)
+  - element (small UI pieces like badges, spinners)
+  - interface (larger compositions)
+`);
+}
+
+async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
-  if (args.length < 2) {
-    console.error("Usage: npx ts-node gemini-design.ts <component_type> <context>");
-    console.error("Example: npx ts-node gemini-design.ts button 'primary action for approving drafts'");
-    process.exit(1);
+  if (args.length < 2 || args.includes("--help") || args.includes("-h")) {
+    printHelp();
+    process.exit(args.length < 2 ? 1 : 0);
   }
 
   const componentType = args[0];
@@ -155,7 +110,7 @@ async function main() {
   console.log("─".repeat(60));
 
   try {
-    const result = await callGemini({ componentType, context });
+    const result = await generateComponent({ componentType, context });
 
     console.log("\n## COMPONENT CODE\n");
     console.log("```tsx");
@@ -178,7 +133,7 @@ async function main() {
     console.log("\n✅ Design complete. Review above and integrate into codebase.\n");
 
   } catch (error) {
-    console.error("Error:", error);
+    console.error("❌ Error:", error);
     process.exit(1);
   }
 }
