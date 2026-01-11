@@ -716,17 +716,10 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      const trimmed = inputValue.trim();
-      if (trimmed && conversationId) {
-        if (isLoading) {
-          // Queue message while Voyager is thinking
-          setMessageQueue(prev => [...prev, trimmed]);
-          setInputValue('');
-        } else {
-          // Send immediately
-          sendMessage({ text: trimmed });
-          setInputValue('');
-        }
+      // Trigger form submit to go through handleSubmit (which handles commands)
+      const form = e.currentTarget.closest('form');
+      if (form) {
+        form.requestSubmit();
       }
     }
     // Shift+Enter allows newline (default textarea behavior)
