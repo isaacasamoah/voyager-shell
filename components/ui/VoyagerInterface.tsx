@@ -1,10 +1,28 @@
 "use client";
 
-import React, { useRef, useEffect, useState, useMemo } from 'react';
+import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
-import { Terminal, Activity } from 'lucide-react';
+import { Terminal, Activity, Ship, Users, Link2 } from 'lucide-react';
 import { UserMessage, AssistantMessage, AstronautState } from '@/components/chat';
+import { useAuth } from '@/lib/auth/context';
+
+// Voyage types
+interface VoyageMembership {
+  id: string;
+  slug: string;
+  name: string;
+  role: 'captain' | 'navigator' | 'crew' | 'observer';
+  joinedAt: string;
+}
+
+interface VoyageDetails {
+  id: string;
+  slug: string;
+  name: string;
+  inviteCode?: string;
+  inviteUrl?: string;
+}
 
 // Extract memories when session ends
 const triggerExtraction = async (messages: UIMessage[]) => {
@@ -43,7 +61,9 @@ interface VoyagerInterfaceProps {
   className?: string;
 }
 
-const COMMAND_HINTS = ['/catch-up', '/standup', '/draft', '/wrap', '/new', '/resume'];
+// Command hints change based on auth state
+const AUTH_COMMANDS = ['/sign-up', '/login'];
+const USER_COMMANDS = ['/catch-up', '/draft', '/wrap', '/new', '/resume', '/voyages', '/logout'];
 
 // API response types
 interface ConversationData {
@@ -92,6 +112,17 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [inputValue, setInputValue] = useState('');
 
+  // Auth state
+  const { user, isAuthenticated, isLoading: isAuthLoading, sendMagicLink, signOut } = useAuth();
+
+  // Auth UI state
+  const [showEmailInput, setShowEmailInput] = useState(false);
+  const [emailInput, setEmailInput] = useState('');
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const [authMessageType, setAuthMessageType] = useState<'info' | 'success' | 'error'>('info');
+  const [isAwaitingMagicLink, setIsAwaitingMagicLink] = useState(false);
+  const wasAuthenticatedRef = useRef(isAuthenticated);
+
   // Conversation state
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversationTitle, setConversationTitle] = useState<string | null>(null);
@@ -102,14 +133,29 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   const [resumableConversations, setResumableConversations] = useState<ResumableConversation[]>([]);
   const [isLoadingResumable, setIsLoadingResumable] = useState(false);
 
-  // Ref to track current conversationId for the transport
+  // Voyage state
+  const [currentVoyage, setCurrentVoyage] = useState<VoyageMembership | null>(null);
+  const [voyages, setVoyages] = useState<VoyageMembership[]>([]);
+  const [showVoyagePicker, setShowVoyagePicker] = useState(false);
+  const [isLoadingVoyages, setIsLoadingVoyages] = useState(false);
+  const [showCreateVoyage, setShowCreateVoyage] = useState(false);
+  const [newVoyageName, setNewVoyageName] = useState('');
+  const [isCreatingVoyage, setIsCreatingVoyage] = useState(false);
+  const [voyageInvite, setVoyageInvite] = useState<{ code: string; url: string } | null>(null);
+
+  // Refs to track current state for the transport
   const conversationIdRef = useRef<string | null>(null);
   conversationIdRef.current = conversationId;
+  const voyageSlugRef = useRef<string | null>(null);
+  voyageSlugRef.current = currentVoyage?.slug ?? null;
 
-  // Create transport with dynamic body that reads current conversationId
+  // Create transport with dynamic body that reads current conversationId and voyage
   const transport = useMemo(() => new DefaultChatTransport({
     api: '/api/chat',
-    body: () => ({ conversationId: conversationIdRef.current }),
+    body: () => ({
+      conversationId: conversationIdRef.current,
+      voyageSlug: voyageSlugRef.current,
+    }),
   }), []);
 
   // useChat with transport
@@ -117,11 +163,22 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     transport,
   });
 
-  // Auto-continue: fetch active conversation on mount
+  // Auto-continue: fetch active conversation on mount and when voyage changes
   useEffect(() => {
+    // Don't fetch if not authenticated or still loading auth
+    if (isAuthLoading) return;
+    if (!isAuthenticated) {
+      setIsLoadingConversation(false);
+      return;
+    }
+
     const fetchActiveConversation = async () => {
       try {
-        const res = await fetch('/api/conversation');
+        const voyageSlug = currentVoyage?.slug;
+        const url = voyageSlug
+          ? `/api/conversation?voyageSlug=${encodeURIComponent(voyageSlug)}`
+          : '/api/conversation';
+        const res = await fetch(url);
         if (!res.ok) throw new Error('Failed to fetch conversation');
 
         const data: ConversationResponse = await res.json();
@@ -132,9 +189,11 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
         if (data.messages.length > 0) {
           const uiMessages = data.messages.map(apiMessageToUIMessage);
           setMessages(uiMessages);
+        } else {
+          setMessages([]);
         }
 
-        console.log('[Voyager] Loaded conversation:', data.conversation.id);
+        console.log('[Voyager] Loaded conversation:', data.conversation.id, 'voyage:', voyageSlug ?? 'personal');
       } catch (error) {
         console.error('[Voyager] Failed to fetch conversation:', error);
       } finally {
@@ -143,7 +202,73 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     };
 
     fetchActiveConversation();
-  }, [setMessages]);
+  }, [setMessages, isAuthenticated, isAuthLoading, currentVoyage?.slug]);
+
+  // Detect when user just logged in (after magic link)
+  useEffect(() => {
+    if (!isAuthLoading && isAuthenticated && !wasAuthenticatedRef.current) {
+      // User just became authenticated
+      setAuthMessage(`Welcome${user?.email ? `, ${user.email.split('@')[0]}` : ''}! You're now logged in.`);
+      setAuthMessageType('success');
+      // Clear after 5 seconds
+      setTimeout(() => setAuthMessage(null), 5000);
+    }
+    wasAuthenticatedRef.current = isAuthenticated;
+  }, [isAuthenticated, isAuthLoading, user?.email]);
+
+  // Fetch voyages when authenticated
+  useEffect(() => {
+    if (!isAuthenticated || isAuthLoading) return;
+
+    const fetchVoyages = async () => {
+      try {
+        const res = await fetch('/api/voyages');
+        if (!res.ok) return;
+
+        const data = await res.json();
+        setVoyages(data.voyages || []);
+
+        // Check for pending invite from join page
+        const pendingInvite = localStorage.getItem('pendingInvite');
+        if (pendingInvite) {
+          localStorage.removeItem('pendingInvite');
+          // Join the voyage
+          const joinRes = await fetch(`/api/voyages/join/${pendingInvite}`, { method: 'POST' });
+          if (joinRes.ok) {
+            const joinData = await joinRes.json();
+            // Refresh voyages and switch to the new one
+            const refreshRes = await fetch('/api/voyages');
+            if (refreshRes.ok) {
+              const refreshData = await refreshRes.json();
+              setVoyages(refreshData.voyages || []);
+              const joined = refreshData.voyages?.find((v: VoyageMembership) => v.slug === joinData.voyage.slug);
+              if (joined) {
+                setCurrentVoyage(joined);
+                setWrapMessage(joinData.alreadyMember
+                  ? `You're already a member of ${joinData.voyage.name}!`
+                  : `Welcome to ${joinData.voyage.name}!`);
+                setTimeout(() => setWrapMessage(null), 3000);
+              }
+            }
+          }
+        }
+
+        // Check URL for voyage param
+        const urlParams = new URLSearchParams(window.location.search);
+        const voyageSlug = urlParams.get('voyage');
+        if (voyageSlug && data.voyages) {
+          const voyage = data.voyages.find((v: VoyageMembership) => v.slug === voyageSlug);
+          if (voyage) {
+            setCurrentVoyage(voyage);
+          }
+        }
+      } catch (error) {
+        console.error('[Voyager] Failed to fetch voyages:', error);
+      }
+    };
+
+    fetchVoyages();
+  }, [isAuthenticated, isAuthLoading]);
 
   // Derived state for loading
   const isLoading = status === 'submitted' || status === 'streaming';
@@ -196,7 +321,11 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
         triggerExtraction(messages);
       }
 
-      const res = await fetch('/api/conversation', { method: 'POST' });
+      const res = await fetch('/api/conversation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ voyageSlug: currentVoyage?.slug }),
+      });
       if (!res.ok) throw new Error('Failed to create new conversation');
 
       const data: ConversationResponse = await res.json();
@@ -221,7 +350,11 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     setShowResumePicker(true);
 
     try {
-      const res = await fetch('/api/conversation/resume?limit=10');
+      const voyageSlug = currentVoyage?.slug;
+      const url = voyageSlug
+        ? `/api/conversation/resume?limit=10&voyageSlug=${encodeURIComponent(voyageSlug)}`
+        : '/api/conversation/resume?limit=10';
+      const res = await fetch(url);
       if (!res.ok) throw new Error('Failed to fetch resumable conversations');
 
       const data: ResumableResponse = await res.json();
@@ -275,6 +408,233 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     }
   };
 
+  // Handle /sign-up or /login command - show email input
+  const handleAuthCommand = useCallback((command: 'sign-up' | 'login') => {
+    setShowEmailInput(true);
+    setAuthMessage(command === 'sign-up'
+      ? 'Enter your email to get started:'
+      : 'Enter your email to log in:');
+    setAuthMessageType('info');
+  }, []);
+
+  // Handle email submission for magic link
+  const handleEmailSubmit = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    const email = emailInput.trim();
+    if (!email) return;
+
+    // Basic email validation
+    if (!email.includes('@') || !email.includes('.')) {
+      setAuthMessage('Please enter a valid email address.');
+      return;
+    }
+
+    setIsAwaitingMagicLink(true);
+    setAuthMessage('Sending magic link...');
+    setAuthMessageType('info');
+
+    const result = await sendMagicLink(email);
+
+    if (result.success) {
+      setAuthMessage(`Magic link sent to ${email}. Check your inbox!`);
+      setAuthMessageType('success');
+      setShowEmailInput(false);
+      setEmailInput('');
+      setIsAwaitingMagicLink(false);
+    } else {
+      setAuthMessage(result.error || 'Failed to send magic link. Please try again.');
+      setAuthMessageType('error');
+      setIsAwaitingMagicLink(false);
+    }
+  }, [emailInput, sendMagicLink]);
+
+  // Handle /logout command
+  const handleLogout = useCallback(async () => {
+    // Trigger extraction for current conversation before logging out
+    if (messages.length >= 2 && !extractedRef.current) {
+      extractedRef.current = true;
+      triggerExtraction(messages);
+    }
+
+    await signOut();
+    setConversationId(null);
+    setConversationTitle(null);
+    setMessages([]);
+    setAuthMessage('You\'ve been logged out. See you next time!');
+    setIsAwaitingMagicLink(false);
+    setTimeout(() => setAuthMessage(null), 3000);
+  }, [messages, signOut, setMessages]);
+
+  // Cancel email input
+  const handleCancelEmailInput = useCallback(() => {
+    setShowEmailInput(false);
+    setEmailInput('');
+    setAuthMessage(null);
+  }, []);
+
+  // Handle /voyages command - show voyage picker
+  const handleVoyagesCommand = useCallback(async () => {
+    setIsLoadingVoyages(true);
+    setShowVoyagePicker(true);
+
+    try {
+      const res = await fetch('/api/voyages');
+      if (!res.ok) throw new Error('Failed to fetch voyages');
+
+      const data = await res.json();
+      setVoyages(data.voyages || []);
+    } catch (error) {
+      console.error('[Voyager] Failed to fetch voyages:', error);
+      setWrapMessage('Failed to load voyages.');
+      setTimeout(() => setWrapMessage(null), 3000);
+      setShowVoyagePicker(false);
+    } finally {
+      setIsLoadingVoyages(false);
+    }
+  }, []);
+
+  // Handle /switch command - switch to a specific voyage
+  const handleSwitchVoyage = useCallback((slug: string) => {
+    if (slug === 'personal' || slug === '') {
+      setCurrentVoyage(null);
+      setShowVoyagePicker(false);
+      setWrapMessage('Switched to Personal context.');
+      setTimeout(() => setWrapMessage(null), 2000);
+      return;
+    }
+
+    const voyage = voyages.find(v => v.slug === slug);
+    if (voyage) {
+      setCurrentVoyage(voyage);
+      setShowVoyagePicker(false);
+      setWrapMessage(`Switched to ${voyage.name}.`);
+      setTimeout(() => setWrapMessage(null), 2000);
+    } else {
+      setWrapMessage(`Voyage "${slug}" not found.`);
+      setTimeout(() => setWrapMessage(null), 3000);
+    }
+  }, [voyages]);
+
+  // Handle /create-voyage command
+  const handleCreateVoyageCommand = useCallback(() => {
+    setShowCreateVoyage(true);
+    setNewVoyageName('');
+  }, []);
+
+  // Submit new voyage creation
+  const handleCreateVoyageSubmit = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = newVoyageName.trim();
+    if (!name) return;
+
+    setIsCreatingVoyage(true);
+
+    try {
+      const res = await fetch('/api/voyages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setWrapMessage(data.error || 'Failed to create voyage.');
+        setTimeout(() => setWrapMessage(null), 3000);
+        return;
+      }
+
+      // Refresh voyages list
+      const refreshRes = await fetch('/api/voyages');
+      if (refreshRes.ok) {
+        const refreshData = await refreshRes.json();
+        setVoyages(refreshData.voyages || []);
+
+        // Switch to the new voyage
+        const newVoyage = refreshData.voyages?.find((v: VoyageMembership) => v.slug === data.voyage.slug);
+        if (newVoyage) {
+          setCurrentVoyage(newVoyage);
+        }
+      }
+
+      // Show invite link
+      setVoyageInvite({
+        code: data.voyage.inviteCode,
+        url: data.voyage.inviteUrl,
+      });
+
+      setShowCreateVoyage(false);
+      setNewVoyageName('');
+      setWrapMessage(`Created ${data.voyage.name}! Share the invite link to add members.`);
+      setTimeout(() => setWrapMessage(null), 5000);
+    } catch (error) {
+      console.error('[Voyager] Failed to create voyage:', error);
+      setWrapMessage('Failed to create voyage.');
+      setTimeout(() => setWrapMessage(null), 3000);
+    } finally {
+      setIsCreatingVoyage(false);
+    }
+  }, [newVoyageName]);
+
+  // Handle /invite command - show invite link
+  const handleInviteCommand = useCallback(async () => {
+    if (!currentVoyage) {
+      setWrapMessage('Switch to a voyage first with /voyages');
+      setTimeout(() => setWrapMessage(null), 3000);
+      return;
+    }
+
+    if (currentVoyage.role !== 'captain' && currentVoyage.role !== 'navigator') {
+      setWrapMessage('Only captains and navigators can view invite links.');
+      setTimeout(() => setWrapMessage(null), 3000);
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/voyages/${currentVoyage.slug}`);
+      if (!res.ok) throw new Error('Failed to fetch voyage');
+
+      const data = await res.json();
+      if (data.voyage.inviteUrl) {
+        setVoyageInvite({
+          code: data.voyage.inviteCode,
+          url: data.voyage.inviteUrl,
+        });
+      } else {
+        setWrapMessage('No invite link available.');
+        setTimeout(() => setWrapMessage(null), 3000);
+      }
+    } catch (error) {
+      console.error('[Voyager] Failed to get invite:', error);
+      setWrapMessage('Failed to get invite link.');
+      setTimeout(() => setWrapMessage(null), 3000);
+    }
+  }, [currentVoyage]);
+
+  // Cancel voyage creation
+  const handleCancelCreateVoyage = useCallback(() => {
+    setShowCreateVoyage(false);
+    setNewVoyageName('');
+  }, []);
+
+  // Close invite display
+  const handleCloseInvite = useCallback(() => {
+    setVoyageInvite(null);
+  }, []);
+
+  // Copy invite link to clipboard
+  const handleCopyInvite = useCallback(async () => {
+    if (!voyageInvite) return;
+    try {
+      await navigator.clipboard.writeText(voyageInvite.url);
+      setWrapMessage('Invite link copied!');
+      setTimeout(() => setWrapMessage(null), 2000);
+    } catch {
+      setWrapMessage('Failed to copy.');
+      setTimeout(() => setWrapMessage(null), 2000);
+    }
+  }, [voyageInvite]);
+
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const trimmed = inputValue.trim();
@@ -309,6 +669,88 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     if (trimmed.toLowerCase() === '/resume') {
       setInputValue('');
       handleResume();
+      return;
+    }
+
+    // Handle /sign-up command
+    if (trimmed.toLowerCase() === '/sign-up') {
+      setInputValue('');
+      handleAuthCommand('sign-up');
+      return;
+    }
+
+    // Handle /login command
+    if (trimmed.toLowerCase() === '/login') {
+      setInputValue('');
+      handleAuthCommand('login');
+      return;
+    }
+
+    // Handle /logout command
+    if (trimmed.toLowerCase() === '/logout') {
+      setInputValue('');
+      handleLogout();
+      return;
+    }
+
+    // Handle /voyages command - show voyage picker
+    if (trimmed.toLowerCase() === '/voyages') {
+      setInputValue('');
+      if (!isAuthenticated) {
+        setAuthMessage('Please /sign-up or /login first.');
+        setTimeout(() => setAuthMessage(null), 3000);
+        return;
+      }
+      handleVoyagesCommand();
+      return;
+    }
+
+    // Handle /switch command
+    if (trimmed.toLowerCase().startsWith('/switch')) {
+      setInputValue('');
+      if (!isAuthenticated) {
+        setAuthMessage('Please /sign-up or /login first.');
+        setTimeout(() => setAuthMessage(null), 3000);
+        return;
+      }
+      const slug = trimmed.slice(7).trim();
+      if (!slug) {
+        handleVoyagesCommand(); // Show picker if no slug provided
+      } else {
+        handleSwitchVoyage(slug);
+      }
+      return;
+    }
+
+    // Handle /create-voyage command
+    if (trimmed.toLowerCase() === '/create-voyage') {
+      setInputValue('');
+      if (!isAuthenticated) {
+        setAuthMessage('Please /sign-up or /login first.');
+        setTimeout(() => setAuthMessage(null), 3000);
+        return;
+      }
+      handleCreateVoyageCommand();
+      return;
+    }
+
+    // Handle /invite command
+    if (trimmed.toLowerCase() === '/invite') {
+      setInputValue('');
+      if (!isAuthenticated) {
+        setAuthMessage('Please /sign-up or /login first.');
+        setTimeout(() => setAuthMessage(null), 3000);
+        return;
+      }
+      handleInviteCommand();
+      return;
+    }
+
+    // For authenticated commands, require login
+    if (!isAuthenticated) {
+      setAuthMessage('Please /sign-up or /login first.');
+      setTimeout(() => setAuthMessage(null), 3000);
+      setInputValue('');
       return;
     }
 
@@ -376,8 +818,30 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
 
           {/* Context Chips */}
           <div className="flex gap-2">
+            {/* Voyage context chip */}
+            {currentVoyage ? (
+              <button
+                type="button"
+                onClick={handleVoyagesCommand}
+                className="px-2 py-1 rounded-sm border border-purple-500/30 bg-purple-500/10 text-purple-300 text-xs flex items-center gap-2 cursor-pointer hover:bg-purple-500/20 transition shadow-[0_0_10px_rgba(168,85,247,0.1)]"
+              >
+                <Ship size={10} />
+                <span className="opacity-50 font-semibold">$VOY:</span> {currentVoyage.name.toUpperCase().replace(/\s+/g, '_')}
+                <span className="opacity-50 text-[10px]">({currentVoyage.role})</span>
+              </button>
+            ) : isAuthenticated ? (
+              <button
+                type="button"
+                onClick={handleVoyagesCommand}
+                className="px-2 py-1 rounded-sm border border-slate-700 bg-slate-800/50 text-slate-400 text-xs flex items-center gap-2 cursor-pointer hover:bg-slate-700/50 transition"
+              >
+                <Ship size={10} />
+                <span className="opacity-50 font-semibold">$VOY:</span> PERSONAL
+              </button>
+            ) : null}
+            {/* Conversation context chip */}
             <div className="px-2 py-1 rounded-sm border border-indigo-500/30 bg-indigo-500/10 text-indigo-300 text-xs flex items-center gap-2 cursor-pointer hover:bg-indigo-500/20 transition shadow-[0_0_10px_rgba(99,102,241,0.1)]">
-              <span className="opacity-50 font-semibold">$CTX:</span> {conversationTitle || 'VOYAGER_V2'}
+              <span className="opacity-50 font-semibold">$CTX:</span> {conversationTitle || 'NEW_SESSION'}
             </div>
           </div>
         </div>
@@ -391,8 +855,8 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
       {/* THE STREAM */}
       <div className="max-w-2xl mx-auto px-4 py-8 space-y-12 pb-48">
 
-        {/* Loading conversation state */}
-        {isLoadingConversation && (
+        {/* Loading conversation state - only show if authenticated */}
+        {isLoadingConversation && isAuthenticated && (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <AstronautState state="searching" size="lg" />
             <div className="mt-6 space-y-2">
@@ -404,16 +868,40 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
           </div>
         )}
 
-        {/* Welcome state when no messages */}
-        {!isLoadingConversation && messages.length === 0 && !isLoading && (
+        {/* Auth loading state - waiting to know if logged in */}
+        {isAuthLoading && (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <AstronautState state="idle" size="lg" />
             <div className="mt-6 space-y-2">
-              <h2 className="text-lg text-slate-300 font-bold">Welcome to Voyager</h2>
-              <p className="text-slate-500 text-sm max-w-md">
-                Your collaboration co-pilot. Ask me anything about your projects,
-                request catch-ups, or draft responses.
-              </p>
+              <h2 className="text-lg text-slate-400 font-bold animate-pulse">Waking up...</h2>
+            </div>
+          </div>
+        )}
+
+        {/* Welcome state - auth-aware */}
+        {!isLoadingConversation && !isAuthLoading && messages.length === 0 && !isLoading && (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <AstronautState state="idle" size="lg" />
+            <div className="mt-6 space-y-2">
+              {isAuthenticated ? (
+                <>
+                  <h2 className="text-lg text-slate-300 font-bold">
+                    Welcome back{user?.email ? `, ${user.email.split('@')[0]}` : ''}
+                  </h2>
+                  <p className="text-slate-500 text-sm max-w-md">
+                    Your collaboration co-pilot is ready. Ask me anything about your projects,
+                    request catch-ups, or draft responses.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <h2 className="text-lg text-slate-300 font-bold">Welcome to Voyager</h2>
+                  <p className="text-slate-500 text-sm max-w-md">
+                    Your collaboration co-pilot. Type <span className="text-indigo-400">/sign-up</span> to get started,
+                    or <span className="text-indigo-400">/login</span> if you&apos;ve been here before.
+                  </p>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -503,6 +991,69 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
           </div>
         )}
 
+        {/* Auth message display */}
+        {authMessage && !showEmailInput && (
+          <div className="flex gap-4">
+            <div className={`w-12 pt-1 text-right text-[10px] font-bold tracking-widest ${
+              authMessageType === 'success' ? 'text-green-500/50' :
+              authMessageType === 'error' ? 'text-red-500/50' :
+              'text-indigo-500/50'
+            }`}>
+              {authMessageType === 'success' ? 'OK' : authMessageType === 'error' ? 'ERR' : 'AUTH'}
+            </div>
+            <div className="flex-1">
+              <div className={`text-sm p-3 rounded-sm ${
+                authMessageType === 'success'
+                  ? 'text-green-300 border border-green-500/30 bg-green-500/10'
+                  : authMessageType === 'error'
+                  ? 'text-red-300 border border-red-500/30 bg-red-500/10'
+                  : 'text-indigo-300 border border-indigo-500/30 bg-indigo-500/10'
+              }`}>
+                {authMessage}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Email input for magic link */}
+        {showEmailInput && (
+          <div className="flex gap-4">
+            <div className="w-12 pt-1 text-right text-indigo-500/50 text-[10px] font-bold tracking-widest">
+              AUTH
+            </div>
+            <div className="flex-1">
+              <div className="border border-indigo-500/30 bg-indigo-500/5 rounded-sm overflow-hidden p-3">
+                <div className="text-indigo-300 text-sm mb-3">{authMessage}</div>
+                <form onSubmit={handleEmailSubmit} className="flex gap-2">
+                  <input
+                    type="email"
+                    value={emailInput}
+                    onChange={(e) => setEmailInput(e.target.value)}
+                    placeholder="your@email.com"
+                    className="flex-1 bg-black/30 border border-indigo-500/30 rounded px-3 py-2 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-400"
+                    autoFocus
+                    disabled={isAwaitingMagicLink}
+                  />
+                  <button
+                    type="submit"
+                    disabled={isAwaitingMagicLink || !emailInput.trim()}
+                    className="px-4 py-2 bg-indigo-500/20 border border-indigo-500/30 rounded text-indigo-300 text-sm hover:bg-indigo-500/30 transition disabled:opacity-50"
+                  >
+                    {isAwaitingMagicLink ? 'Sending...' : 'Send Link'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCancelEmailInput}
+                    className="px-3 py-2 text-slate-500 hover:text-slate-300 text-sm"
+                  >
+                    Cancel
+                  </button>
+                </form>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Resume Picker */}
         {showResumePicker && (
           <div className="flex gap-4">
@@ -554,6 +1105,170 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
           </div>
         )}
 
+        {/* Voyage Picker */}
+        {showVoyagePicker && (
+          <div className="flex gap-4">
+            <div className="w-12 pt-1 text-right text-purple-500/50 text-[10px] font-bold tracking-widest">
+              <Ship size={12} className="inline" />
+            </div>
+            <div className="flex-1">
+              <div className="border border-purple-500/30 bg-purple-500/5 rounded-sm overflow-hidden">
+                <div className="px-3 py-2 border-b border-purple-500/20 flex items-center justify-between">
+                  <span className="text-purple-300 text-xs font-bold">Your Voyages</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowVoyagePicker(false)}
+                    className="text-slate-500 hover:text-slate-300 text-xs"
+                  >
+                    [ESC]
+                  </button>
+                </div>
+                {isLoadingVoyages ? (
+                  <div className="px-3 py-4 text-slate-500 text-xs">Loading voyages...</div>
+                ) : (
+                  <div className="divide-y divide-purple-500/10 max-h-64 overflow-y-auto">
+                    {/* Personal context option */}
+                    <button
+                      type="button"
+                      onClick={() => handleSwitchVoyage('personal')}
+                      className={`w-full px-3 py-2 text-left hover:bg-purple-500/10 transition-colors ${
+                        !currentVoyage ? 'bg-purple-500/10' : ''
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="text-slate-300 text-sm flex items-center gap-2">
+                          {!currentVoyage && <span className="text-purple-400">→</span>}
+                          Personal
+                        </div>
+                        <span className="text-slate-600 text-[10px]">private</span>
+                      </div>
+                      <div className="text-slate-500 text-xs mt-0.5">Your private space</div>
+                    </button>
+                    {/* User voyages */}
+                    {voyages.map((voyage) => (
+                      <button
+                        key={voyage.id}
+                        type="button"
+                        onClick={() => handleSwitchVoyage(voyage.slug)}
+                        className={`w-full px-3 py-2 text-left hover:bg-purple-500/10 transition-colors ${
+                          currentVoyage?.slug === voyage.slug ? 'bg-purple-500/10' : ''
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="text-slate-300 text-sm flex items-center gap-2">
+                            {currentVoyage?.slug === voyage.slug && <span className="text-purple-400">→</span>}
+                            {voyage.name}
+                          </div>
+                          <span className="text-purple-400 text-[10px]">{voyage.role}</span>
+                        </div>
+                        <div className="text-slate-600 text-[10px] mt-0.5">/{voyage.slug}</div>
+                      </button>
+                    ))}
+                    {voyages.length === 0 && (
+                      <div className="px-3 py-4 text-slate-500 text-xs">
+                        No voyages yet. Use <span className="text-purple-400">/create-voyage</span> to start one.
+                      </div>
+                    )}
+                  </div>
+                )}
+                {/* Create voyage button */}
+                <div className="px-3 py-2 border-t border-purple-500/20">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowVoyagePicker(false);
+                      handleCreateVoyageCommand();
+                    }}
+                    className="text-purple-400 text-xs hover:text-purple-300 transition"
+                  >
+                    + Create new voyage
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Create Voyage Form */}
+        {showCreateVoyage && (
+          <div className="flex gap-4">
+            <div className="w-12 pt-1 text-right text-purple-500/50 text-[10px] font-bold tracking-widest">
+              NEW
+            </div>
+            <div className="flex-1">
+              <div className="border border-purple-500/30 bg-purple-500/5 rounded-sm overflow-hidden p-3">
+                <div className="text-purple-300 text-sm mb-3">What would you like to call this voyage?</div>
+                <form onSubmit={handleCreateVoyageSubmit} className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newVoyageName}
+                    onChange={(e) => setNewVoyageName(e.target.value)}
+                    placeholder="e.g., Sophiie Team"
+                    className="flex-1 bg-black/30 border border-purple-500/30 rounded px-3 py-2 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-purple-400"
+                    autoFocus
+                    disabled={isCreatingVoyage}
+                  />
+                  <button
+                    type="submit"
+                    disabled={isCreatingVoyage || !newVoyageName.trim()}
+                    className="px-4 py-2 bg-purple-500/20 border border-purple-500/30 rounded text-purple-300 text-sm hover:bg-purple-500/30 transition disabled:opacity-50"
+                  >
+                    {isCreatingVoyage ? 'Creating...' : 'Create'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCancelCreateVoyage}
+                    className="px-3 py-2 text-slate-500 hover:text-slate-300 text-sm"
+                  >
+                    Cancel
+                  </button>
+                </form>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Invite Link Display */}
+        {voyageInvite && (
+          <div className="flex gap-4">
+            <div className="w-12 pt-1 text-right text-purple-500/50 text-[10px] font-bold tracking-widest">
+              <Link2 size={12} className="inline" />
+            </div>
+            <div className="flex-1">
+              <div className="border border-purple-500/30 bg-purple-500/5 rounded-sm overflow-hidden p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-purple-300 text-xs font-bold">Invite Link</span>
+                  <button
+                    type="button"
+                    onClick={handleCloseInvite}
+                    className="text-slate-500 hover:text-slate-300 text-xs"
+                  >
+                    [×]
+                  </button>
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={voyageInvite.url}
+                    readOnly
+                    className="flex-1 bg-black/30 border border-purple-500/30 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCopyInvite}
+                    className="px-4 py-2 bg-purple-500/20 border border-purple-500/30 rounded text-purple-300 text-sm hover:bg-purple-500/30 transition"
+                  >
+                    Copy
+                  </button>
+                </div>
+                <div className="text-slate-500 text-xs mt-2">
+                  Share this link to invite people to your voyage.
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Scroll anchor */}
         <div ref={messagesEndRef} />
       </div>
@@ -561,9 +1276,9 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
       {/* INPUT DECK */}
       <div className="fixed bottom-0 left-0 right-0 bg-[#050505]/95 backdrop-blur border-t border-white/10 p-4 pb-6">
         <div className="max-w-2xl mx-auto">
-          {/* Command Hints */}
+          {/* Command Hints - auth-aware */}
           <div className="flex gap-2 mb-3 overflow-x-auto pb-1 scrollbar-hide">
-            {COMMAND_HINTS.map(cmd => (
+            {(isAuthenticated ? USER_COMMANDS : AUTH_COMMANDS).map(cmd => (
               <button
                 key={cmd}
                 type="button"

@@ -2,6 +2,7 @@
 // Manages session lifecycle, message persistence, and conversation resumption
 
 import { getAdminClient } from '@/lib/supabase/admin'
+import { getVoyageBySlug } from '@/lib/voyage'
 import type {
   Message,
   ExtendedSession,
@@ -13,6 +14,11 @@ import type {
 // Use admin client for conversation operations (bypasses RLS)
 // TODO: Switch to user-scoped client once auth is wired up
 const getClient = () => getAdminClient()
+
+// Options for conversation operations
+interface ConversationOptions {
+  voyageSlug?: string
+}
 
 // Re-export types for convenience
 export type { ExtendedSession, ResumableSession, SessionStatus, MessageRole }
@@ -94,52 +100,80 @@ const transformResumable = (row: ResumableSession): ResumableConversation => ({
 /**
  * Get or create the user's active conversation.
  * Returns the session with its messages loaded.
+ * If voyageSlug is provided, looks for voyage-scoped session.
  */
 export const getOrCreateActiveConversation = async (
-  userId: string
+  userId: string,
+  options?: ConversationOptions
 ): Promise<ConversationWithMessages | null> => {
   const supabase = getClient()
-  console.log('[Conversation] Getting or creating active conversation for user:', userId)
+  const { voyageSlug } = options ?? {}
+
+  console.log('[Conversation] Getting or creating active conversation for user:', userId, 'voyage:', voyageSlug ?? 'personal')
 
   try {
-    // Call the database function to get/create active session
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: sessionId, error: rpcError } = await (supabase as any).rpc(
-      'get_or_create_active_session',
-      { p_user_id: userId }
-    )
-
-    if (rpcError) {
-      console.error('[Conversation] get_or_create_active_session error:', rpcError)
-      return null
+    // Get voyage ID if in voyage context
+    let voyageId: string | null = null
+    if (voyageSlug) {
+      const voyage = await getVoyageBySlug(voyageSlug)
+      voyageId = voyage?.id ?? null
+      if (!voyageId) {
+        console.error('[Conversation] Voyage not found:', voyageSlug)
+      }
     }
 
-    if (!sessionId) {
-      console.error('[Conversation] No session ID returned')
-      return null
-    }
-
-    console.log('[Conversation] Active session ID:', sessionId)
-
-    // Fetch the full session data
+    // Look for existing active session (scoped to voyage if specified)
+    // Fetch full row directly to avoid redundant query
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: session, error: sessionError } = await (supabase as any)
+    let query = (supabase as any)
       .from('sessions')
       .select('*')
-      .eq('id', sessionId)
-      .single()
+      .eq('user_id', userId)
+      .eq('status', 'active')
 
-    if (sessionError) {
-      console.error('[Conversation] Session fetch error:', sessionError)
+    if (voyageId) {
+      query = query.eq('community_id', voyageId)
+    } else {
+      query = query.is('community_id', null)
+    }
+
+    const { data: existingSession } = await query.single()
+    let session = existingSession as ExtendedSession | null
+
+    // Create new session if none exists
+    if (!session) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: newSession, error: createError } = await (supabase as any)
+        .from('sessions')
+        .insert({
+          user_id: userId,
+          status: 'active',
+          community_id: voyageId,
+        })
+        .select('*')
+        .single()
+
+      if (createError) {
+        console.error('[Conversation] Failed to create session:', createError)
+        return null
+      }
+
+      session = newSession as ExtendedSession
+    }
+
+    if (!session) {
+      console.error('[Conversation] No session')
       return null
     }
+
+    console.log('[Conversation] Active session ID:', session.id)
 
     // Fetch messages for this session
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: messages, error: messagesError } = await (supabase as any)
       .from('messages')
       .select('*')
-      .eq('session_id', sessionId)
+      .eq('session_id', session.id)
       .order('created_at', { ascending: true })
 
     if (messagesError) {
@@ -147,7 +181,7 @@ export const getOrCreateActiveConversation = async (
       return null
     }
 
-    const conversation = transformSession(session as ExtendedSession)
+    const conversation = transformSession(session)
     const conversationMessages = (messages as Message[]).map(transformMessage)
 
     console.log(
@@ -279,33 +313,84 @@ export const archiveConversation = async (
 /**
  * Get resumable conversations for a user.
  * Returns conversations ordered by recency with preview text.
+ * If voyageSlug is provided, returns only voyage-scoped conversations.
  */
 export const getResumableConversations = async (
   userId: string,
-  limit = 10
+  limit = 10,
+  options?: ConversationOptions
 ): Promise<ResumableConversation[]> => {
   const supabase = getClient()
-  console.log('[Conversation] Getting resumable conversations for user:', userId)
+  const { voyageSlug } = options ?? {}
+
+  console.log('[Conversation] Getting resumable conversations for user:', userId, 'voyage:', voyageSlug ?? 'personal')
 
   try {
+    // Get voyage ID if in voyage context
+    let voyageId: string | null = null
+    if (voyageSlug) {
+      const voyage = await getVoyageBySlug(voyageSlug)
+      voyageId = voyage?.id ?? null
+    }
+
+    // Query sessions directly with voyage filtering
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data, error } = await (supabase as any).rpc('get_resumable_sessions', {
-      p_user_id: userId,
-      p_limit: limit,
-    })
+    let query = (supabase as any)
+      .from('sessions')
+      .select(`
+        id,
+        title,
+        status,
+        message_count,
+        last_message_at,
+        created_at,
+        messages!inner (content)
+      `)
+      .eq('user_id', userId)
+      .in('status', ['active', 'historical'])
+      .gte('message_count', 1)
+      .order('last_message_at', { ascending: false })
+      .limit(limit)
+
+    if (voyageId) {
+      query = query.eq('community_id', voyageId)
+    } else {
+      query = query.is('community_id', null)
+    }
+
+    const { data, error } = await query
 
     if (error) {
       console.error('[Conversation] getResumableConversations error:', error)
       return []
     }
 
-    const results = data as ResumableSession[] | null
-    if (!results || results.length === 0) {
+    if (!data || data.length === 0) {
       console.log('[Conversation] No resumable conversations found')
       return []
     }
 
-    const conversations = results.map(transformResumable)
+    // Transform results - extract first message as preview
+    interface SessionWithMessages {
+      id: string
+      title: string | null
+      status: SessionStatus
+      message_count: number
+      last_message_at: string
+      created_at: string
+      messages: { content: string }[]
+    }
+
+    const conversations = (data as SessionWithMessages[]).map((row) => ({
+      id: row.id,
+      title: row.title,
+      status: row.status,
+      messageCount: row.message_count,
+      lastMessageAt: new Date(row.last_message_at),
+      createdAt: new Date(row.created_at),
+      preview: row.messages?.[0]?.content?.slice(0, 100) ?? null,
+    }))
+
     console.log('[Conversation] Found', conversations.length, 'resumable conversations')
 
     return conversations
