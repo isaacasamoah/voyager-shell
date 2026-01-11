@@ -1,5 +1,5 @@
 import { anthropic } from '@ai-sdk/anthropic';
-import { streamText, APICallError } from 'ai';
+import { streamText, APICallError, stepCountIs } from 'ai';
 import { composeSystemPrompt, getBasePrompt } from '@/lib/prompts';
 import {
   saveMessage,
@@ -9,9 +9,13 @@ import {
 } from '@/lib/conversation';
 import { callGeminiJSON } from '@/lib/gemini/client';
 import { emitMessageEvent, type KnowledgeNode } from '@/lib/knowledge';
-import { logRetrievalEvent, logCitations } from '@/lib/retrieval';
+import { logRetrievalEvent, logCitations, createRetrievalTools } from '@/lib/retrieval';
+import { getAuthenticatedUserId } from '@/lib/auth';
 
 export const maxDuration = 30;
+
+// Fallback for development (will be removed once auth is fully tested)
+const DEV_USER_ID = '00000000-0000-0000-0000-000000000001';
 
 // =============================================================================
 // Title Generation
@@ -71,8 +75,6 @@ const maybeGenerateTitle = (conversationId: string): void => {
     });
 };
 
-// Placeholder user ID until auth is wired up (must be valid UUID)
-const PLACEHOLDER_USER_ID = '00000000-0000-0000-0000-000000000001';
 
 // Message types for AI SDK v6
 interface UIMessagePart {
@@ -130,7 +132,10 @@ export const POST = async (req: Request) => {
   }
 
   try {
-    const { messages, conversationId } = await req.json();
+    // Get authenticated user ID, fall back to dev user if not authenticated
+    const userId = await getAuthenticatedUserId() ?? DEV_USER_ID;
+
+    const { messages, conversationId, voyageSlug } = await req.json();
 
     if (!messages || !Array.isArray(messages)) {
       return new Response(
@@ -163,7 +168,8 @@ export const POST = async (req: Request) => {
       // Emit knowledge event (fire-and-forget)
       // Messages ARE the knowledge — preserved exactly as source events
       emitMessageEvent(conversationId, 'user', queryText, {
-        userId: PLACEHOLDER_USER_ID,
+        userId: userId,
+        voyageSlug: voyageSlug,
       });
     }
 
@@ -176,15 +182,16 @@ export const POST = async (req: Request) => {
 
     try {
       const { systemPrompt: composedPrompt, retrieval } = await composeSystemPrompt(
-        PLACEHOLDER_USER_ID,
-        queryText
+        userId,
+        queryText,
+        { voyageSlug }
       );
       systemPrompt = composedPrompt;
       retrievedKnowledge = retrieval.knowledge;
 
       // Log retrieval event (fire-and-forget)
       logRetrievalEvent({
-        userId: PLACEHOLDER_USER_ID,
+        userId: userId,
         conversationId,
         query: queryText,
         nodesReturned: retrieval.knowledge,
@@ -201,10 +208,19 @@ export const POST = async (req: Request) => {
       systemPrompt = getBasePrompt();
     }
 
+    // Create retrieval tools for agentic search
+    // Claude decides when and how to dig deeper into knowledge
+    const retrievalTools = createRetrievalTools({
+      userId,
+      voyageSlug,
+    });
+
     const result = streamText({
       model: anthropic('claude-sonnet-4-20250514'),
       system: systemPrompt,
       messages: simpleMessages,
+      tools: retrievalTools,
+      stopWhen: stepCountIs(5), // Allow up to 5 tool-calling steps per response
       onFinish: async ({ text }) => {
         // Save assistant response after streaming completes
         if (conversationId && text) {
@@ -214,7 +230,8 @@ export const POST = async (req: Request) => {
             // Emit knowledge event (fire-and-forget)
             // Messages ARE the knowledge — preserved exactly as source events
             emitMessageEvent(conversationId, 'assistant', text, {
-              userId: PLACEHOLDER_USER_ID,
+              userId: userId,
+              voyageSlug: voyageSlug,
             });
 
             // Log citations (fire-and-forget)

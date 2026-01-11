@@ -199,3 +199,10 @@ export {
   detectCitations,
   type RetrievalEventInput,
 } from './logging';
+
+// Export retrieval tools for agentic search
+export {
+  createRetrievalTools,
+  type ToolContext,
+  type RetrievalTools,
+} from './tools';

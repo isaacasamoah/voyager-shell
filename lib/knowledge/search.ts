@@ -373,6 +373,134 @@ export const formatKnowledgeForPrompt = (nodes: KnowledgeNode[]): string => {
 }
 
 // =============================================================================
+// Keyword Grep (Exact Match Search)
+// =============================================================================
+
+export interface GrepOptions {
+  /** Search scope. Default: 'all' */
+  scope?: 'personal' | 'community' | 'all'
+  /** Case sensitive match. Default: false */
+  caseSensitive?: boolean
+  /** Maximum results. Default: 20 */
+  limit?: number
+  /** Filter by voyage slug */
+  voyageSlug?: string
+}
+
+export interface GrepResult extends Omit<KnowledgeNode, 'similarity'> {
+  /** Highlighted excerpt showing match context */
+  highlight: string
+  /** Match position in content */
+  matchStart: number
+}
+
+/**
+ * Exact keyword/phrase search across knowledge.
+ * Use for precise matching when you know the exact terms.
+ * Returns matches with surrounding context.
+ *
+ * @param userId - The user's ID (for personal knowledge scope)
+ * @param pattern - Exact phrase or keyword to find
+ * @param options - Search options
+ * @returns Array of matching nodes with highlights
+ */
+export const keywordGrep = async (
+  userId: string,
+  pattern: string,
+  options: GrepOptions = {}
+): Promise<GrepResult[]> => {
+  const {
+    scope = 'all',
+    caseSensitive = false,
+    limit = 20,
+    voyageSlug,
+  } = options
+
+  if (!pattern.trim()) {
+    return []
+  }
+
+  try {
+    console.log(
+      `[Knowledge] Grep: "${pattern}" scope: ${scope}, case: ${caseSensitive}, limit: ${limit}`
+    )
+
+    const supabase = getClient()
+
+    // Build the query - using ILIKE for case-insensitive, LIKE for case-sensitive
+    const operator = caseSensitive ? 'like' : 'ilike'
+    const searchPattern = `%${pattern}%`
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let query = (supabase as any)
+      .from('knowledge_current')
+      .select('*')
+      .filter('content', operator, searchPattern)
+      .eq('is_active', true)
+
+    // Apply scope filters
+    if (scope === 'personal') {
+      query = query.eq('user_id', userId).is('voyage_slug', null)
+    } else if (scope === 'community' && voyageSlug) {
+      query = query.eq('voyage_slug', voyageSlug)
+    } else if (voyageSlug) {
+      // 'all' with voyage context: include both personal and voyage
+      query = query.or(`user_id.eq.${userId},voyage_slug.eq.${voyageSlug}`)
+    } else {
+      // 'all' without voyage: just personal
+      query = query.eq('user_id', userId)
+    }
+
+    const { data, error } = await query
+      .order('importance', { ascending: false })
+      .order('source_created_at', { ascending: false })
+      .limit(limit)
+
+    if (error) {
+      console.error('[Knowledge] Grep error:', error)
+      return []
+    }
+
+    const results = (data ?? []) as SearchKnowledgeResult[]
+
+    console.log(`[Knowledge] Grep found ${results.length} matches`)
+
+    // Transform results and add highlights
+    return results.map((row) => {
+      const content = row.content
+      const lowerContent = caseSensitive ? content : content.toLowerCase()
+      const lowerPattern = caseSensitive ? pattern : pattern.toLowerCase()
+      const matchStart = lowerContent.indexOf(lowerPattern)
+
+      // Create highlight with context (50 chars before/after)
+      const start = Math.max(0, matchStart - 50)
+      const end = Math.min(content.length, matchStart + pattern.length + 50)
+      let highlight = content.slice(start, end)
+      if (start > 0) highlight = '...' + highlight
+      if (end < content.length) highlight = highlight + '...'
+
+      return {
+        eventId: row.event_id,
+        content: row.content,
+        classifications: row.classifications ?? [],
+        entities: row.entities ?? [],
+        topics: row.topics ?? [],
+        isActive: row.is_active,
+        isPinned: row.is_pinned,
+        importance: row.importance,
+        connectedTo: row.connected_to ?? [],
+        createdAt: new Date(row.source_created_at),
+        highlight,
+        matchStart,
+      }
+    })
+  } catch (error) {
+    console.error('[Knowledge] keywordGrep error:', error)
+    return []
+  }
+}
+
+// =============================================================================
 // Exports
 // =============================================================================
 

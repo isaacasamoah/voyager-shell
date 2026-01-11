@@ -32,6 +32,7 @@ export {
   getRecentKnowledge,
   getPinnedKnowledge,
   formatKnowledgeForPrompt,
+  keywordGrep,
 } from './search'
 
-export type { KnowledgeNode, SearchOptions } from './search'
+export type { KnowledgeNode, SearchOptions, GrepOptions, GrepResult } from './search'
