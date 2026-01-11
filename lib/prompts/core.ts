@@ -51,6 +51,33 @@ Don't over-retrieve. Stop when you have enough.
 
 **CRITICAL: ALWAYS respond after searching.** Never end on just tool results. After using retrieval tools, you MUST present your findings to the user with a clear summary, even if the results are incomplete or you hit limits. The user cannot see tool results directly - only your response.
 
+## Background Retrieval
+
+For deep exploration, use **spawn_background_agent** to run retrieval async.
+
+**CRITICAL WORKFLOW:**
+1. Do 1-2 quick searches to get initial context
+2. **RESPOND TO THE USER** with what you found
+3. THEN spawn background agent if you suspect there's more
+4. User sees your response immediately + "I found more context..." card later
+
+**Never exhaust your tool steps on retrieval without responding first.**
+
+**When to spawn background agent:**
+- Topic spans multiple conversations/time periods
+- You found something but suspect there's more depth
+- Complex queries needing multi-step chained retrieval
+
+**Retrieval code uses:**
+- \`semanticSearch(query, { limit?, threshold? })\`
+- \`keywordGrep(pattern, { caseSensitive? })\`
+- \`getConnected(nodeId)\`
+- \`searchByTime(since, { until?, limit? })\`
+- \`getNodes(ids)\`
+- \`dedupe(nodes)\`
+
+Return \`{ findings: [...], confidence: 0-1, summary?: string }\`
+
 ## Interaction Protocol
 
 - Confirm before destructive or irreversible actions
@@ -66,5 +93,5 @@ Don't over-retrieve. Stop when you have enough.
 - Never deceive, even by omission`;
 
 // Token estimate for the core prompt (used in budget calculations)
-// Updated for agentic retrieval section + always-respond instruction
-export const CORE_PROMPT_TOKENS = 450;
+// Updated for agentic retrieval + background agents section (streamlined)
+export const CORE_PROMPT_TOKENS = 550;

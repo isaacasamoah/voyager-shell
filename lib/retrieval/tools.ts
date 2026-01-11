@@ -18,6 +18,8 @@ import {
   type GrepResult,
 } from '@/lib/knowledge'
 import { getAdminClient } from '@/lib/supabase/admin'
+import { enqueueAgentTask, completeTask, failTask } from '@/lib/agents/queue'
+import { executeRetrievalCode } from '@/lib/agents/executor'
 
 // Resolve short ID (8 chars) to full UUID
 const resolveNodeId = async (shortOrFullId: string): Promise<string | null> => {
@@ -46,6 +48,9 @@ const resolveNodeId = async (shortOrFullId: string): Promise<string | null> => {
 export interface ToolContext {
   userId: string
   voyageSlug?: string
+  conversationId?: string
+  /** Vercel waitUntil for background execution without blocking response */
+  waitUntil?: (promise: Promise<unknown>) => void
 }
 
 // =============================================================================
@@ -112,6 +117,12 @@ const searchByTimeSchema = z.object({
   until: z.string().optional().describe('End date: ISO string or relative. Defaults to now.'),
   query: z.string().optional().describe('Optional semantic query to filter results'),
   limit: z.number().optional().default(15).describe('Max results'),
+})
+
+const spawnBackgroundAgentSchema = z.object({
+  task: z.string().describe('Human description of what to find'),
+  code: z.string().describe('JavaScript code using retrieval functions'),
+  priority: z.enum(['low', 'normal', 'high']).optional().default('normal'),
 })
 
 // =============================================================================
@@ -304,6 +315,92 @@ Supports: ISO dates (2024-01-15) or relative (yesterday, last week, 3 days ago).
       // If query provided, could filter semantically here (future enhancement)
       const header = `Found ${results.length} items from ${sinceDate.toLocaleDateString()} to ${untilDate.toLocaleDateString()}:\n\n`
       return header + formatKnowledgeResult(results)
+    },
+  }),
+
+  /**
+   * Spawn a background agent for deeper retrieval.
+   * Use when immediate results aren't enough and deeper exploration would help.
+   * Write custom JavaScript code to chain retrieval functions.
+   * Results surface via realtime when ready.
+   */
+  spawn_background_agent: tool({
+    description: `Spawn background retrieval with custom code.
+Write JavaScript that uses our retrieval functions to find comprehensive information.
+The code runs async in background. Results surface via realtime when ready.
+
+Available functions:
+- semanticSearch(query, { limit?, threshold? }) - Conceptual search
+- keywordGrep(pattern, { caseSensitive?, limit? }) - Exact phrase match
+- getConnected(nodeId, { type?, depth? }) - Graph traversal
+- searchByTime(timeframe, { query? }) - Temporal search
+- getNodes(ids) - Fetch by ID
+- dedupe(nodes) - Remove duplicates
+
+Strategy pattern:
+1. Start broad (semanticSearch)
+2. Follow leads (getConnected)
+3. Pinpoint (keywordGrep)
+4. Return { findings: [...], confidence: 0-1 }
+
+Use when:
+- User asks about history/decisions that might have more context
+- Topic spans multiple conversations or time periods
+- You found something but suspect there's more
+
+Example code:
+const broad = await semanticSearch("pricing", { limit: 20 });
+const decisions = await Promise.all(
+  broad.slice(0, 3).map(n => getConnected(n.id, { type: "decision" }))
+);
+const exact = await keywordGrep("$79");
+return { findings: dedupe([...broad, ...decisions.flat(), ...exact]), confidence: 0.85 };`,
+    inputSchema: spawnBackgroundAgentSchema,
+    execute: async (input) => {
+      const { task, code, priority } = input
+
+      // Validate we have a conversation context
+      if (!ctx.conversationId) {
+        return 'Cannot spawn background agent: no conversation context'
+      }
+
+      try {
+        // Enqueue task (for audit trail + cron fallback)
+        const taskId = await enqueueAgentTask({
+          task,
+          code,
+          priority: priority ?? 'normal',
+          userId: ctx.userId,
+          voyageSlug: ctx.voyageSlug,
+          conversationId: ctx.conversationId,
+        })
+
+        // Execute immediately via waitUntil (non-blocking)
+        // Results surface via Realtime in ~1-2 seconds
+        if (ctx.waitUntil) {
+          const executeTask = async () => {
+            const startTime = Date.now()
+            try {
+              const result = await executeRetrievalCode(code, {
+                userId: ctx.userId,
+                voyageSlug: ctx.voyageSlug,
+                conversationId: ctx.conversationId!,
+              })
+              await completeTask(taskId, result, Date.now() - startTime)
+              console.log(`[spawn_background_agent] Task ${taskId.slice(0, 8)} completed: ${result.findings.length} findings`)
+            } catch (error) {
+              await failTask(taskId, error instanceof Error ? error.message : 'Unknown error')
+              console.error(`[spawn_background_agent] Task ${taskId.slice(0, 8)} failed:`, error)
+            }
+          }
+          ctx.waitUntil(executeTask())
+        }
+
+        return `Background retrieval started (task: ${taskId.slice(0, 8)}). Results will surface when ready. Continue your response - don't wait.`
+      } catch (error) {
+        console.error('[spawn_background_agent] Failed to enqueue:', error)
+        return `Failed to spawn background agent: ${error instanceof Error ? error.message : 'Unknown error'}`
+      }
     },
   }),
 })

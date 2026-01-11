@@ -4,8 +4,9 @@ import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react'
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import { Terminal, Activity, Ship, Users, Link2 } from 'lucide-react';
-import { UserMessage, AssistantMessage, AstronautState } from '@/components/chat';
+import { UserMessage, AssistantMessage, AstronautState, AgentResultCard } from '@/components/chat';
 import { useAuth } from '@/lib/auth/context';
+import { createClient } from '@/lib/supabase/client';
 
 // Voyage types
 interface VoyageMembership {
@@ -30,7 +31,7 @@ interface VoyagerInterfaceProps {
 
 // Command hints change based on auth state
 const AUTH_COMMANDS = ['/sign-up', '/login'];
-const USER_COMMANDS = ['/new', '/resume', '/voyages', '/logout'];
+const USER_COMMANDS = ['/new', '/resume', '/voyages', '/create-voyage', '/invite', '/logout'];
 
 // API response types
 interface ConversationData {
@@ -66,6 +67,22 @@ interface ResumableConversation {
 
 interface ResumableResponse {
   conversations: ResumableConversation[];
+}
+
+// Agent result from background worker
+interface AgentResult {
+  id: string;
+  task: string;
+  result: {
+    findings: Array<{
+      eventId: string;
+      content: string;
+      similarity?: number;
+      isPinned?: boolean;
+    }>;
+    confidence: number;
+    summary?: string;
+  };
 }
 
 // Convert API message to UIMessage format for useChat
@@ -113,6 +130,9 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   const [newVoyageName, setNewVoyageName] = useState('');
   const [isCreatingVoyage, setIsCreatingVoyage] = useState(false);
   const [voyageInvite, setVoyageInvite] = useState<{ code: string; url: string } | null>(null);
+
+  // Background agent results (Phase 2: Claude as Query Compiler)
+  const [agentResults, setAgentResults] = useState<AgentResult[]>([]);
 
   // Refs to track current state for the transport
   const conversationIdRef = useRef<string | null>(null);
@@ -240,6 +260,48 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
 
     fetchVoyages();
   }, [isAuthenticated, isAuthLoading]);
+
+  // Subscribe to background agent results (Phase 2)
+  useEffect(() => {
+    if (!conversationId || !isAuthenticated) return;
+
+    const supabase = createClient();
+
+    const channel = supabase
+      .channel(`agents:${conversationId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'agent_tasks',
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        (payload) => {
+          const newData = payload.new as Record<string, unknown>;
+          if (newData.status === 'complete' && newData.result) {
+            setAgentResults((prev) => [
+              ...prev,
+              {
+                id: newData.id as string,
+                task: newData.task as string,
+                result: newData.result as AgentResult['result'],
+              },
+            ]);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [conversationId, isAuthenticated]);
+
+  // Clear agent results when conversation changes
+  useEffect(() => {
+    setAgentResults([]);
+  }, [conversationId]);
 
   // Derived state for loading
   const isLoading = status === 'submitted' || status === 'streaming';
@@ -1229,6 +1291,21 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
                 </div>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Agent Results - Background retrieval findings */}
+        {agentResults.length > 0 && (
+          <div className="space-y-3 max-w-2xl mx-auto py-4">
+            {agentResults.map((result) => (
+              <AgentResultCard
+                key={result.id}
+                result={result}
+                onDismiss={() => {
+                  setAgentResults((prev) => prev.filter((r) => r.id !== result.id));
+                }}
+              />
+            ))}
           </div>
         )}
 

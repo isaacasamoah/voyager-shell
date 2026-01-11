@@ -1,5 +1,6 @@
 import { anthropic } from '@ai-sdk/anthropic';
 import { streamText, APICallError, stepCountIs } from 'ai';
+import { waitUntil } from '@vercel/functions';
 import { composeSystemPrompt, getBasePrompt } from '@/lib/prompts';
 import {
   saveMessage,
@@ -213,6 +214,8 @@ export const POST = async (req: Request) => {
     const retrievalTools = createRetrievalTools({
       userId,
       voyageSlug,
+      conversationId,
+      waitUntil, // For immediate background agent execution
     });
 
     const result = streamText({
