@@ -8,13 +8,20 @@ export const createClient = async () => {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
-  console.log('[Supabase] Creating client:', {
-    url: url ? `${url.slice(0, 30)}...` : 'MISSING',
-    keyPrefix: key ? key.slice(0, 20) : 'MISSING'
-  })
-
+  // During build/static generation, env vars may not be available
   if (!url || !key) {
-    throw new Error(`Supabase config missing: url=${!!url}, key=${!!key}`)
+    console.warn('[Supabase] Server client missing credentials - build context')
+    // Return a placeholder client for build-time
+    return createServerClient<Database>(
+      'https://placeholder.supabase.co',
+      'placeholder-key',
+      {
+        cookies: {
+          getAll: () => [],
+          setAll: () => {},
+        },
+      }
+    )
   }
 
   return createServerClient<Database>(

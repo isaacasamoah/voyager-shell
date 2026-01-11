@@ -7,25 +7,33 @@ import {
   getResumableConversations,
   resumeConversation,
 } from '@/lib/conversation'
+import { getAuthenticatedUserId } from '@/lib/auth'
 
-// Placeholder user ID until auth is wired up
+// Fallback for development (will be removed once auth is fully tested)
 const DEV_USER_ID = '00000000-0000-0000-0000-000000000001'
 
 /**
  * GET /api/conversation/resume
  * List resumable (historical) conversations.
  * Used by conversation picker UI.
+ * Optional query param: voyageSlug - scope to a specific voyage
  */
 export const GET = async (req: Request) => {
   console.log('[Resume API] GET - Fetching resumable conversations')
 
   try {
-    // Parse limit from query params (default 10)
+    // Get authenticated user ID, fall back to dev user if not authenticated
+    const userId = await getAuthenticatedUserId() ?? DEV_USER_ID
+
+    // Parse query params
     const url = new URL(req.url)
     const limitParam = url.searchParams.get('limit')
     const limit = limitParam ? Math.min(parseInt(limitParam, 10), 50) : 10
+    const voyageSlug = url.searchParams.get('voyageSlug') ?? undefined
 
-    const conversations = await getResumableConversations(DEV_USER_ID, limit)
+    console.log('[Resume API] Voyage scope:', voyageSlug ?? 'personal')
+
+    const conversations = await getResumableConversations(userId, limit, { voyageSlug })
 
     console.log('[Resume API] Found', conversations.length, 'resumable conversations')
 
@@ -82,9 +90,12 @@ export const POST = async (req: Request) => {
       )
     }
 
+    // Get authenticated user ID, fall back to dev user if not authenticated
+    const userId = await getAuthenticatedUserId() ?? DEV_USER_ID
+
     console.log('[Resume API] Resuming conversation:', body.conversationId)
 
-    const conversation = await resumeConversation(body.conversationId, DEV_USER_ID)
+    const conversation = await resumeConversation(body.conversationId, userId)
 
     if (!conversation) {
       console.error('[Resume API] Failed to resume conversation:', body.conversationId)
