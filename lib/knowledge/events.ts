@@ -101,6 +101,80 @@ const toVectorString = (embedding: number[]): string => {
 }
 
 // =============================================================================
+// Entity-Based Auto-Linking (Graph Edges)
+// =============================================================================
+
+/**
+ * Auto-link a new event to existing events that share entities.
+ * Creates bidirectional edges in the knowledge graph.
+ *
+ * Strategy: Find events with overlapping entities, add to connected_to array.
+ * Limit to 5 connections per new event to avoid graph explosion.
+ */
+const autoLinkByEntities = async (
+  newEventId: string,
+  entities: string[],
+  userId: string,
+  voyageSlug?: string
+): Promise<void> => {
+  if (entities.length === 0) return
+
+  const supabase = getClient()
+
+  // Find existing events with overlapping entities (not this event)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let query = (supabase as any)
+    .from('knowledge_current')
+    .select('event_id, entities')
+    .neq('event_id', newEventId)
+    .eq('is_active', true)
+    .overlaps('entities', entities)
+    .limit(5)
+
+  // Scope to user/voyage
+  if (voyageSlug) {
+    query = query.eq('voyage_slug', voyageSlug)
+  } else {
+    query = query.eq('user_id', userId).is('voyage_slug', null)
+  }
+
+  const { data: relatedEvents, error } = await query
+
+  if (error || !relatedEvents || relatedEvents.length === 0) {
+    return
+  }
+
+  const relatedIds = relatedEvents.map((e: { event_id: string }) => e.event_id)
+  console.log(`[Knowledge] Auto-linking ${newEventId} to ${relatedIds.length} related events`)
+
+  // Update the new event's connected_to
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (supabase as any)
+    .from('knowledge_current')
+    .update({ connected_to: relatedIds })
+    .eq('event_id', newEventId)
+
+  // Update related events to include this new event (bidirectional)
+  for (const relatedId of relatedIds) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: existing } = await (supabase as any)
+      .from('knowledge_current')
+      .select('connected_to')
+      .eq('event_id', relatedId)
+      .single()
+
+    const currentConnections = (existing?.connected_to as string[]) ?? []
+    if (!currentConnections.includes(newEventId)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any)
+        .from('knowledge_current')
+        .update({ connected_to: [...currentConnections, newEventId] })
+        .eq('event_id', relatedId)
+    }
+  }
+}
+
+// =============================================================================
 // Source Event Creation
 // =============================================================================
 
@@ -186,6 +260,18 @@ const createSourceEvent = async (params: CreateSourceEventParams): Promise<strin
     } catch (embedError) {
       // Log but don't fail — search will work once embedding is added
       console.error('[Knowledge] Failed to generate embedding:', embedError)
+    }
+
+    // Auto-link to related events by entity overlap (Phase 1.5: Graph edges)
+    // Find events that share entities with this one and create bidirectional links
+    const entities = metadata.entities ?? []
+    if (entities.length > 0 && userId) {
+      try {
+        await autoLinkByEntities(eventId, entities, userId, voyageSlug)
+      } catch (linkError) {
+        // Log but don't fail — linking is enhancement, not critical
+        console.error('[Knowledge] Failed to auto-link:', linkError)
+      }
     }
 
     return eventId
