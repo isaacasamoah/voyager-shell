@@ -1,6 +1,7 @@
 "use client";
 
 import React from 'react';
+import ReactMarkdown from 'react-markdown';
 import { AstronautState } from './AstronautState';
 
 interface AssistantMessageProps {
@@ -51,8 +52,8 @@ export const AssistantMessage = ({
 
           {/* Response Content */}
           <div className="ml-0 pl-4 border-l border-indigo-500/20">
-            <div className="text-slate-300 leading-relaxed text-sm whitespace-pre-wrap">
-              {content}
+            <div className="text-slate-300 leading-relaxed text-sm prose prose-invert prose-sm max-w-none prose-p:my-2 prose-headings:text-slate-200 prose-headings:font-bold prose-code:text-indigo-300 prose-code:bg-slate-800/50 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-700 prose-a:text-indigo-400 prose-strong:text-slate-200 prose-ul:my-2 prose-ol:my-2 prose-li:my-0">
+              <ReactMarkdown>{content}</ReactMarkdown>
               {isStreaming && (
                 <span className="inline-block w-2 h-4 bg-indigo-400 ml-1 animate-pulse" />
               )}

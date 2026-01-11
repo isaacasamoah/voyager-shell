@@ -110,6 +110,7 @@ const apiMessageToUIMessage = (msg: MessageData): UIMessage => ({
 
 export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const [inputValue, setInputValue] = useState('');
 
   // Auth state
@@ -127,6 +128,9 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversationTitle, setConversationTitle] = useState<string | null>(null);
   const [isLoadingConversation, setIsLoadingConversation] = useState(true);
+
+  // Message queue - type while Voyager is thinking
+  const [messageQueue, setMessageQueue] = useState<string[]>([]);
 
   // Resume picker state
   const [showResumePicker, setShowResumePicker] = useState(false);
@@ -274,10 +278,45 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   const isLoading = status === 'submitted' || status === 'streaming';
   const isStreaming = status === 'streaming';
 
+  // Process queued messages when Voyager finishes responding
+  useEffect(() => {
+    if (!isLoading && messageQueue.length > 0 && conversationId) {
+      const nextMessage = messageQueue[0];
+      setMessageQueue(prev => prev.slice(1));
+      // Small delay to let the UI settle
+      setTimeout(() => {
+        sendMessage({ text: nextMessage });
+      }, 100);
+    }
+  }, [isLoading, messageQueue, conversationId, sendMessage]);
+
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, status]);
+
+  // Keep input always focused - ready to type from anywhere
+  useEffect(() => {
+    const focusInput = () => {
+      if (inputRef.current && !isLoading) {
+        inputRef.current.focus();
+      }
+    };
+
+    // Focus on mount and after messages change
+    focusInput();
+
+    // Re-focus when clicking anywhere in the document (except other inputs)
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.tagName !== 'BUTTON') {
+        focusInput();
+      }
+    };
+
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, [messages, isLoading, status]);
 
   // Track if we've already extracted for this session
   const extractedRef = useRef(false);
@@ -638,7 +677,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const trimmed = inputValue.trim();
-    if (!trimmed || isLoading) return;
+    if (!trimmed) return;
 
     // Handle /wrap command - end session and extract
     if (trimmed.toLowerCase() === '/wrap') {
@@ -758,18 +797,33 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
       console.error('[Voyager] Cannot send - no conversation loaded');
       return;
     }
-    sendMessage({ text: trimmed });
+
+    if (isLoading) {
+      // Queue message while Voyager is thinking
+      setMessageQueue(prev => [...prev, trimmed]);
+    } else {
+      sendMessage({ text: trimmed });
+    }
     setInputValue('');
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if (inputValue.trim() && !isLoading && conversationId) {
-        sendMessage({ text: inputValue.trim() });
-        setInputValue('');
+      const trimmed = inputValue.trim();
+      if (trimmed && conversationId) {
+        if (isLoading) {
+          // Queue message while Voyager is thinking
+          setMessageQueue(prev => [...prev, trimmed]);
+          setInputValue('');
+        } else {
+          // Send immediately
+          sendMessage({ text: trimmed });
+          setInputValue('');
+        }
       }
     }
+    // Shift+Enter allows newline (default textarea behavior)
   };
 
   const handleCommandClick = (command: string) => {
@@ -789,7 +843,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   };
 
   return (
-    <div className={`min-h-screen bg-[#050505] text-slate-300 font-mono text-sm selection:bg-indigo-500/30 overflow-hidden relative ${className || ''}`}>
+    <div className={`min-h-screen bg-[#050505] text-slate-300 font-mono text-sm selection:bg-indigo-500/30 overflow-x-hidden relative ${className || ''}`}>
 
       {/* SVG FILTERS (The "Terminal Look" Engine) */}
       <svg className="absolute w-0 h-0">
@@ -806,8 +860,8 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
         </defs>
       </svg>
 
-      {/* CONTEXT BAR */}
-      <div className="sticky top-0 z-50 border-b border-white/10 bg-[#050505]/95 backdrop-blur-md px-4 py-3 flex items-center justify-between shadow-2xl">
+      {/* CONTEXT BAR - Fixed header */}
+      <div className="fixed top-0 left-0 right-0 z-50 border-b border-white/10 bg-[#050505]/95 backdrop-blur-md px-4 py-3 flex items-center justify-between shadow-2xl">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2 text-indigo-400 group cursor-pointer">
             <Terminal size={16} className="group-hover:text-indigo-300 transition-colors" />
@@ -852,8 +906,8 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
         </div>
       </div>
 
-      {/* THE STREAM */}
-      <div className="max-w-2xl mx-auto px-4 py-8 space-y-12 pb-48">
+      {/* THE STREAM - pt-20 accounts for fixed header */}
+      <div className="max-w-2xl mx-auto px-4 pt-20 pb-48 space-y-12">
 
         {/* Loading conversation state - only show if authenticated */}
         {isLoadingConversation && isAuthenticated && (
@@ -1290,27 +1344,38 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
             ))}
           </div>
 
-          <form onSubmit={handleSubmit} className="flex items-center gap-3 group">
-            <span className="text-green-500 font-bold animate-pulse">&#10132;</span>
-            <span className="text-indigo-400 text-xs font-bold">~/voyager</span>
+          <form onSubmit={handleSubmit} className="flex items-start gap-3 group">
+            <span className={`font-bold mt-1 ${isLoading ? 'text-amber-500' : 'text-green-500 animate-pulse'}`}>&#10132;</span>
+            <span className="text-indigo-400 text-xs font-bold mt-1">~/voyager</span>
             <div className="flex-1 relative">
-              <input
-                type="text"
-                className="w-full bg-transparent border-none outline-none text-slate-200 placeholder-slate-700 font-mono text-sm h-6"
-                placeholder={isLoading ? "Voyager is thinking..." : "Type a message..."}
+              <textarea
+                ref={inputRef}
+                className="w-full bg-transparent border-none outline-none text-slate-200 placeholder-slate-700 font-mono text-sm resize-none min-h-[24px] max-h-32 overflow-y-auto"
+                placeholder={isLoading ? "Type to queue message..." : "Type a message..."}
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyDown}
-                disabled={isLoading}
-                autoFocus
+                rows={1}
+                style={{ height: 'auto' }}
+                onInput={(e) => {
+                  const target = e.target as HTMLTextAreaElement;
+                  target.style.height = 'auto';
+                  target.style.height = Math.min(target.scrollHeight, 128) + 'px';
+                }}
               />
             </div>
-            {inputValue.trim() && !isLoading && (
+            {/* Queue indicator */}
+            {messageQueue.length > 0 && (
+              <span className="text-amber-400 text-xs font-bold mt-1 animate-pulse">
+                {messageQueue.length} queued
+              </span>
+            )}
+            {inputValue.trim() && (
               <button
                 type="submit"
-                className="text-indigo-400 text-xs font-bold hover:text-indigo-300 transition"
+                className={`text-xs font-bold transition mt-1 ${isLoading ? 'text-amber-400 hover:text-amber-300' : 'text-indigo-400 hover:text-indigo-300'}`}
               >
-                SEND
+                {isLoading ? 'QUEUE' : 'SEND'}
               </button>
             )}
           </form>
