@@ -63,7 +63,7 @@ interface VoyagerInterfaceProps {
 
 // Command hints change based on auth state
 const AUTH_COMMANDS = ['/sign-up', '/login'];
-const USER_COMMANDS = ['/new', '/resume', '/wrap', '/voyages', '/logout'];
+const USER_COMMANDS = ['/new', '/resume', '/voyages', '/logout'];
 
 // API response types
 interface ConversationData {
