@@ -28,6 +28,7 @@ Voyager makes high-quality collaboration easy and careless collaboration hard. N
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | How to contribute, code style, PR process |
 | [CLAUDE.md](./CLAUDE.md) | Project context for Claude Code / AI assistants |
 | [.env.example](./.env.example) | Required environment variables |
+| [Testing Checklist](./docs/testing/v0.1-checklist.md) | v0.1 feature testing guide for testers |
 
 ---
 
