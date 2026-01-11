@@ -21,9 +21,9 @@ interface AstronautStateProps {
 
 export const AstronautState = ({ state, size = 'md', className = '' }: AstronautStateProps) => {
   const sizeClasses = {
-    sm: 'w-16 h-16',
-    md: 'w-24 h-24',
-    lg: 'w-32 h-32',
+    sm: 'w-20 h-20',   // 80px - was 64px
+    md: 'w-32 h-32',   // 128px - was 96px
+    lg: 'w-48 h-48',   // 192px - was 128px
   };
 
   const stateConfig = {

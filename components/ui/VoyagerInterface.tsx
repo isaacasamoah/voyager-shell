@@ -789,7 +789,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
                 className="px-2 py-1 rounded-sm border border-purple-500/30 bg-purple-500/10 text-purple-300 text-xs flex items-center gap-2 cursor-pointer hover:bg-purple-500/20 transition shadow-[0_0_10px_rgba(168,85,247,0.1)]"
               >
                 <Ship size={10} />
-                <span className="opacity-50 font-semibold">$VOY:</span> {currentVoyage.name.toUpperCase().replace(/\s+/g, '_')}
+                <span className="opacity-30 font-semibold">$VOY:</span> {currentVoyage.name.toUpperCase().replace(/\s+/g, '_')}
                 <span className="opacity-50 text-[10px]">({currentVoyage.role})</span>
               </button>
             ) : isAuthenticated ? (
@@ -799,12 +799,12 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
                 className="px-2 py-1 rounded-sm border border-slate-700 bg-slate-800/50 text-slate-400 text-xs flex items-center gap-2 cursor-pointer hover:bg-slate-700/50 transition"
               >
                 <Ship size={10} />
-                <span className="opacity-50 font-semibold">$VOY:</span> PERSONAL
+                <span className="opacity-30 font-semibold">$VOY:</span> PERSONAL
               </button>
             ) : null}
             {/* Conversation context chip */}
             <div className="px-2 py-1 rounded-sm border border-indigo-500/30 bg-indigo-500/10 text-indigo-300 text-xs flex items-center gap-2 cursor-pointer hover:bg-indigo-500/20 transition shadow-[0_0_10px_rgba(99,102,241,0.1)]">
-              <span className="opacity-50 font-semibold">$CTX:</span> {conversationTitle || 'NEW_SESSION'}
+              <span className="opacity-30 font-semibold">$CTX:</span> {conversationTitle || 'NEW_SESSION'}
             </div>
           </div>
         </div>
@@ -1240,13 +1240,13 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
       <div className="fixed bottom-0 left-0 right-0 bg-[#050505]/95 backdrop-blur border-t border-white/10 p-4 pb-6">
         <div className="max-w-2xl mx-auto">
           {/* Command Hints - auth-aware */}
-          <div className="flex gap-2 mb-3 overflow-x-auto pb-1 scrollbar-hide">
+          <div className="flex gap-2 mb-3 overflow-x-auto pb-1 scrollbar-hide snap-x snap-mandatory">
             {(isAuthenticated ? USER_COMMANDS : AUTH_COMMANDS).map(cmd => (
               <button
                 key={cmd}
                 type="button"
                 onClick={() => handleCommandClick(cmd)}
-                className="px-3 py-1 bg-white/5 border border-white/5 rounded text-xs text-slate-400 hover:border-indigo-500/50 hover:text-indigo-300 transition whitespace-nowrap font-mono"
+                className="px-3 py-1 bg-white/5 border border-white/5 rounded text-xs text-slate-400 hover:border-indigo-500/50 hover:text-indigo-300 hover:bg-white/10 transition whitespace-nowrap font-mono snap-start shrink-0 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
               >
                 {cmd}
               </button>
