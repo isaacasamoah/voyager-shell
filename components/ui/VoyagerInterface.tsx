@@ -24,39 +24,6 @@ interface VoyageDetails {
   inviteUrl?: string;
 }
 
-// Extract memories when session ends
-const triggerExtraction = async (messages: UIMessage[]) => {
-  if (messages.length < 2) return;
-
-  // Convert UIMessage to simple format
-  const simpleMessages = messages.map((m) => {
-    let content = '';
-    if (Array.isArray(m.parts)) {
-      content = m.parts
-        .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-        .map((p) => p.text)
-        .join('');
-    }
-    return { role: m.role as 'user' | 'assistant', content };
-  }).filter((m) => m.content.length > 0);
-
-  if (simpleMessages.length < 2) return;
-
-  try {
-    // Fire and forget - don't block
-    fetch('/api/extract', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: simpleMessages }),
-      // Use keepalive to ensure request completes even if page closes
-      keepalive: true,
-    });
-    console.log('[Voyager] Triggered memory extraction');
-  } catch (error) {
-    console.error('[Voyager] Extraction trigger failed:', error);
-  }
-};
-
 interface VoyagerInterfaceProps {
   className?: string;
 }
@@ -248,10 +215,10 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
               const joined = refreshData.voyages?.find((v: VoyageMembership) => v.slug === joinData.voyage.slug);
               if (joined) {
                 setCurrentVoyage(joined);
-                setWrapMessage(joinData.alreadyMember
+                setFeedbackMessage(joinData.alreadyMember
                   ? `You're already a member of ${joinData.voyage.name}!`
                   : `Welcome to ${joinData.voyage.name}!`);
-                setTimeout(() => setWrapMessage(null), 3000);
+                setTimeout(() => setFeedbackMessage(null), 3000);
               }
             }
           }
@@ -325,48 +292,12 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     return () => document.removeEventListener('click', handleClick);
   }, [messages, isLoading, status]);
 
-  // Track if we've already extracted for this session
-  const extractedRef = useRef(false);
-  const messagesRef = useRef(messages);
-  messagesRef.current = messages;
-
-  // Trigger extraction when user leaves (visibility change or beforeunload)
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.hidden && !extractedRef.current && messagesRef.current.length >= 2) {
-        extractedRef.current = true;
-        triggerExtraction(messagesRef.current);
-      }
-    };
-
-    const handleBeforeUnload = () => {
-      if (!extractedRef.current && messagesRef.current.length >= 2) {
-        extractedRef.current = true;
-        triggerExtraction(messagesRef.current);
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('beforeunload', handleBeforeUnload);
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, []);
-
-  // State for wrap command feedback
-  const [wrapMessage, setWrapMessage] = useState<string | null>(null);
+  // State for command feedback
+  const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
 
   // Handle /new command - create new conversation
   const handleNewConversation = async () => {
     try {
-      // Trigger extraction for current conversation before creating new
-      if (messages.length >= 2 && !extractedRef.current) {
-        extractedRef.current = true;
-        triggerExtraction(messages);
-      }
-
       const res = await fetch('/api/conversation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -378,15 +309,14 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
       setConversationId(data.conversation.id);
       setConversationTitle(data.conversation.title);
       setMessages([]);
-      extractedRef.current = false; // Reset extraction flag for new conversation
 
-      setWrapMessage('New conversation started.');
-      setTimeout(() => setWrapMessage(null), 2000);
+      setFeedbackMessage('New conversation started.');
+      setTimeout(() => setFeedbackMessage(null), 2000);
       console.log('[Voyager] Created new conversation:', data.conversation.id);
     } catch (error) {
       console.error('[Voyager] Failed to create new conversation:', error);
-      setWrapMessage('Failed to start new conversation.');
-      setTimeout(() => setWrapMessage(null), 3000);
+      setFeedbackMessage('Failed to start new conversation.');
+      setTimeout(() => setFeedbackMessage(null), 3000);
     }
   };
 
@@ -407,8 +337,8 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
       setResumableConversations(data.conversations);
     } catch (error) {
       console.error('[Voyager] Failed to fetch resumable conversations:', error);
-      setWrapMessage('Failed to load conversations.');
-      setTimeout(() => setWrapMessage(null), 3000);
+      setFeedbackMessage('Failed to load conversations.');
+      setTimeout(() => setFeedbackMessage(null), 3000);
       setShowResumePicker(false);
     } finally {
       setIsLoadingResumable(false);
@@ -418,12 +348,6 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   // Resume a specific conversation
   const handleResumeConversation = async (targetId: string) => {
     try {
-      // Trigger extraction for current conversation before resuming
-      if (messages.length >= 2 && !extractedRef.current) {
-        extractedRef.current = true;
-        triggerExtraction(messages);
-      }
-
       const res = await fetch('/api/conversation/resume', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -444,13 +368,12 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
         setMessages([]);
       }
 
-      extractedRef.current = false; // Reset extraction flag
       setShowResumePicker(false);
       console.log('[Voyager] Resumed conversation:', data.conversation.id);
     } catch (error) {
       console.error('[Voyager] Failed to resume conversation:', error);
-      setWrapMessage('Failed to resume conversation.');
-      setTimeout(() => setWrapMessage(null), 3000);
+      setFeedbackMessage('Failed to resume conversation.');
+      setTimeout(() => setFeedbackMessage(null), 3000);
     }
   };
 
@@ -496,12 +419,6 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
 
   // Handle /logout command
   const handleLogout = useCallback(async () => {
-    // Trigger extraction for current conversation before logging out
-    if (messages.length >= 2 && !extractedRef.current) {
-      extractedRef.current = true;
-      triggerExtraction(messages);
-    }
-
     await signOut();
     setConversationId(null);
     setConversationTitle(null);
@@ -509,7 +426,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     setAuthMessage('You\'ve been logged out. See you next time!');
     setIsAwaitingMagicLink(false);
     setTimeout(() => setAuthMessage(null), 3000);
-  }, [messages, signOut, setMessages]);
+  }, [signOut, setMessages]);
 
   // Cancel email input
   const handleCancelEmailInput = useCallback(() => {
@@ -531,8 +448,8 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
       setVoyages(data.voyages || []);
     } catch (error) {
       console.error('[Voyager] Failed to fetch voyages:', error);
-      setWrapMessage('Failed to load voyages.');
-      setTimeout(() => setWrapMessage(null), 3000);
+      setFeedbackMessage('Failed to load voyages.');
+      setTimeout(() => setFeedbackMessage(null), 3000);
       setShowVoyagePicker(false);
     } finally {
       setIsLoadingVoyages(false);
@@ -544,8 +461,8 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     if (slug === 'personal' || slug === '') {
       setCurrentVoyage(null);
       setShowVoyagePicker(false);
-      setWrapMessage('Switched to Personal context.');
-      setTimeout(() => setWrapMessage(null), 2000);
+      setFeedbackMessage('Switched to Personal context.');
+      setTimeout(() => setFeedbackMessage(null), 2000);
       return;
     }
 
@@ -553,11 +470,11 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     if (voyage) {
       setCurrentVoyage(voyage);
       setShowVoyagePicker(false);
-      setWrapMessage(`Switched to ${voyage.name}.`);
-      setTimeout(() => setWrapMessage(null), 2000);
+      setFeedbackMessage(`Switched to ${voyage.name}.`);
+      setTimeout(() => setFeedbackMessage(null), 2000);
     } else {
-      setWrapMessage(`Voyage "${slug}" not found.`);
-      setTimeout(() => setWrapMessage(null), 3000);
+      setFeedbackMessage(`Voyage "${slug}" not found.`);
+      setTimeout(() => setFeedbackMessage(null), 3000);
     }
   }, [voyages]);
 
@@ -585,8 +502,8 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
       const data = await res.json();
 
       if (!res.ok) {
-        setWrapMessage(data.error || 'Failed to create voyage.');
-        setTimeout(() => setWrapMessage(null), 3000);
+        setFeedbackMessage(data.error || 'Failed to create voyage.');
+        setTimeout(() => setFeedbackMessage(null), 3000);
         return;
       }
 
@@ -611,12 +528,12 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
 
       setShowCreateVoyage(false);
       setNewVoyageName('');
-      setWrapMessage(`Created ${data.voyage.name}! Share the invite link to add members.`);
-      setTimeout(() => setWrapMessage(null), 5000);
+      setFeedbackMessage(`Created ${data.voyage.name}! Share the invite link to add members.`);
+      setTimeout(() => setFeedbackMessage(null), 5000);
     } catch (error) {
       console.error('[Voyager] Failed to create voyage:', error);
-      setWrapMessage('Failed to create voyage.');
-      setTimeout(() => setWrapMessage(null), 3000);
+      setFeedbackMessage('Failed to create voyage.');
+      setTimeout(() => setFeedbackMessage(null), 3000);
     } finally {
       setIsCreatingVoyage(false);
     }
@@ -625,14 +542,14 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   // Handle /invite command - show invite link
   const handleInviteCommand = useCallback(async () => {
     if (!currentVoyage) {
-      setWrapMessage('Switch to a voyage first with /voyages');
-      setTimeout(() => setWrapMessage(null), 3000);
+      setFeedbackMessage('Switch to a voyage first with /voyages');
+      setTimeout(() => setFeedbackMessage(null), 3000);
       return;
     }
 
     if (currentVoyage.role !== 'captain' && currentVoyage.role !== 'navigator') {
-      setWrapMessage('Only captains and navigators can view invite links.');
-      setTimeout(() => setWrapMessage(null), 3000);
+      setFeedbackMessage('Only captains and navigators can view invite links.');
+      setTimeout(() => setFeedbackMessage(null), 3000);
       return;
     }
 
@@ -647,13 +564,13 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
           url: data.voyage.inviteUrl,
         });
       } else {
-        setWrapMessage('No invite link available.');
-        setTimeout(() => setWrapMessage(null), 3000);
+        setFeedbackMessage('No invite link available.');
+        setTimeout(() => setFeedbackMessage(null), 3000);
       }
     } catch (error) {
       console.error('[Voyager] Failed to get invite:', error);
-      setWrapMessage('Failed to get invite link.');
-      setTimeout(() => setWrapMessage(null), 3000);
+      setFeedbackMessage('Failed to get invite link.');
+      setTimeout(() => setFeedbackMessage(null), 3000);
     }
   }, [currentVoyage]);
 
@@ -673,11 +590,11 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     if (!voyageInvite) return;
     try {
       await navigator.clipboard.writeText(voyageInvite.url);
-      setWrapMessage('Invite link copied!');
-      setTimeout(() => setWrapMessage(null), 2000);
+      setFeedbackMessage('Invite link copied!');
+      setTimeout(() => setFeedbackMessage(null), 2000);
     } catch {
-      setWrapMessage('Failed to copy.');
-      setTimeout(() => setWrapMessage(null), 2000);
+      setFeedbackMessage('Failed to copy.');
+      setTimeout(() => setFeedbackMessage(null), 2000);
     }
   }, [voyageInvite]);
 
@@ -685,24 +602,6 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     e.preventDefault();
     const trimmed = inputValue.trim();
     if (!trimmed) return;
-
-    // Handle /wrap command - end session and extract
-    if (trimmed.toLowerCase() === '/wrap') {
-      setInputValue('');
-      if (messages.length >= 2 && !extractedRef.current) {
-        extractedRef.current = true;
-        triggerExtraction(messages);
-        setWrapMessage('Session wrapped. Memories are being saved...');
-        setTimeout(() => setWrapMessage(null), 3000);
-      } else if (messages.length < 2) {
-        setWrapMessage('Nothing to wrap yet - have a conversation first.');
-        setTimeout(() => setWrapMessage(null), 3000);
-      } else {
-        setWrapMessage('Already wrapped this session.');
-        setTimeout(() => setWrapMessage(null), 3000);
-      }
-      return;
-    }
 
     // Handle /new command - start new conversation
     if (trimmed.toLowerCase() === '/new') {
@@ -1039,14 +938,14 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
           </div>
         )}
 
-        {wrapMessage && (
+        {feedbackMessage && (
           <div className="flex gap-4">
             <div className="w-12 pt-1 text-right text-green-500/50 text-[10px] font-bold tracking-widest">
               SYS
             </div>
             <div className="flex-1">
               <div className="text-green-400 text-sm p-3 border border-green-500/30 bg-green-500/10 rounded-sm">
-                {wrapMessage}
+                {feedbackMessage}
               </div>
             </div>
           </div>
