@@ -20,6 +20,17 @@ Voyager makes high-quality collaboration easy and careless collaboration hard. N
 
 ---
 
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | Deep dive for contributors - retrieval system, knowledge layer, design decisions |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | How to contribute, code style, PR process |
+| [CLAUDE.md](./CLAUDE.md) | Project context for Claude Code / AI assistants |
+| [.env.example](./.env.example) | Required environment variables |
+
+---
+
 ## Architecture
 
 ```
