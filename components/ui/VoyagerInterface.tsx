@@ -63,7 +63,7 @@ interface VoyagerInterfaceProps {
 
 // Command hints change based on auth state
 const AUTH_COMMANDS = ['/sign-up', '/login'];
-const USER_COMMANDS = ['/catch-up', '/draft', '/wrap', '/new', '/resume', '/voyages', '/logout'];
+const USER_COMMANDS = ['/new', '/resume', '/wrap', '/voyages', '/logout'];
 
 // API response types
 interface ConversationData {
@@ -950,8 +950,8 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
                     Welcome back{user?.email ? `, ${user.email.split('@')[0]}` : ''}
                   </h2>
                   <p className="text-slate-500 text-sm max-w-md">
-                    Your collaboration co-pilot is ready. Ask me anything about your projects,
-                    request catch-ups, or draft responses.
+                    Your collaboration co-pilot is ready. I remember our past conversations
+                    and can help you find anything we&apos;ve discussed.
                   </p>
                 </>
               ) : (
