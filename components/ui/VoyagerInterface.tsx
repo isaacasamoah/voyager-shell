@@ -485,9 +485,12 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   }, []);
 
   // Submit new voyage creation
-  const handleCreateVoyageSubmit = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
-    const name = newVoyageName.trim();
+  // Can be called from form (e = FormEvent) or directly with name string
+  const handleCreateVoyageSubmit = useCallback(async (e: React.FormEvent | string) => {
+    if (typeof e !== 'string') {
+      e.preventDefault();
+    }
+    const name = typeof e === 'string' ? e.trim() : newVoyageName.trim();
     if (!name) return;
 
     setIsCreatingVoyage(true);
@@ -668,14 +671,21 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     }
 
     // Handle /create-voyage command
-    if (trimmed.toLowerCase() === '/create-voyage') {
+    if (trimmed.toLowerCase().startsWith('/create-voyage')) {
       setInputValue('');
       if (!isAuthenticated) {
         setAuthMessage('Please /sign-up or /login first.');
         setTimeout(() => setAuthMessage(null), 3000);
         return;
       }
-      handleCreateVoyageCommand();
+      const voyageName = trimmed.slice(14).trim(); // "/create-voyage" = 14 chars
+      if (voyageName) {
+        // Create directly with provided name
+        handleCreateVoyageSubmit(voyageName);
+      } else {
+        // Show form for name input
+        handleCreateVoyageCommand();
+      }
       return;
     }
 
