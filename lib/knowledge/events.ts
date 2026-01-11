@@ -122,7 +122,7 @@ const autoLinkByEntities = async (
   const supabase = getClient()
 
   // Find existing events with overlapping entities (not this event)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  
   let query = (supabase as any)
     .from('knowledge_current')
     .select('event_id, entities')
@@ -148,7 +148,7 @@ const autoLinkByEntities = async (
   console.log(`[Knowledge] Auto-linking ${newEventId} to ${relatedIds.length} related events`)
 
   // Update the new event's connected_to
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  
   await (supabase as any)
     .from('knowledge_current')
     .update({ connected_to: relatedIds })
@@ -156,7 +156,7 @@ const autoLinkByEntities = async (
 
   // Update related events to include this new event (bidirectional)
   for (const relatedId of relatedIds) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data: existing } = await (supabase as any)
       .from('knowledge_current')
       .select('connected_to')
@@ -165,7 +165,7 @@ const autoLinkByEntities = async (
 
     const currentConnections = (existing?.connected_to as string[]) ?? []
     if (!currentConnections.includes(newEventId)) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      
       await (supabase as any)
         .from('knowledge_current')
         .update({ connected_to: [...currentConnections, newEventId] })
@@ -215,7 +215,7 @@ const createSourceEvent = async (params: CreateSourceEventParams): Promise<strin
 
     // Insert the source event
     // The trigger creates knowledge_current row with the content
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any)
       .from('knowledge_events')
       .insert({
@@ -251,7 +251,7 @@ const createSourceEvent = async (params: CreateSourceEventParams): Promise<strin
     try {
       const embedding = await generateEmbedding(content)
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      
       await (supabase as any).rpc('update_knowledge_embedding', {
         p_event_id: eventId,
         p_embedding: toVectorString(embedding),
@@ -363,7 +363,7 @@ export const quietKnowledge = async (
   try {
     const supabase = getClient()
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { error } = await (supabase as any)
       .from('knowledge_events')
       .insert({
@@ -405,7 +405,7 @@ export const pinKnowledge = async (
   try {
     const supabase = getClient()
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { error } = await (supabase as any)
       .from('knowledge_events')
       .insert({
@@ -445,7 +445,7 @@ export const activateKnowledge = async (
   try {
     const supabase = getClient()
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { error } = await (supabase as any)
       .from('knowledge_events')
       .insert({

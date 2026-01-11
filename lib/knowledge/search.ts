@@ -148,7 +148,7 @@ export const searchKnowledge = async (
     const embedding = await generateEmbedding(query)
 
     // Call the RPC function for semantic search
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any).rpc('search_knowledge', {
       query_embedding: toVectorString(embedding),
       p_user_id: userId,
@@ -193,7 +193,7 @@ export const getKnowledgeByIds = async (eventIds: string[]): Promise<KnowledgeNo
   try {
     const supabase = getClient()
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any)
       .from('knowledge_current')
       .select('*')
@@ -225,7 +225,7 @@ export const getConnectedKnowledge = async (eventId: string): Promise<KnowledgeN
     const supabase = getClient()
 
     // Get the node to find its connections
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data: node, error: nodeError } = await (supabase as any)
       .from('knowledge_current')
       .select('connected_to')
@@ -260,7 +260,7 @@ export const getRecentKnowledge = async (
   try {
     const supabase = getClient()
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any)
       .from('knowledge_current')
       .select('*')
@@ -297,7 +297,7 @@ export const getPinnedKnowledge = async (
   try {
     const supabase = getClient()
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     let query = (supabase as any)
       .from('knowledge_current')
       .select('*')
@@ -431,7 +431,7 @@ export const keywordGrep = async (
     const operator = caseSensitive ? 'like' : 'ilike'
     const searchPattern = `%${pattern}%`
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     let query = (supabase as any)
       .from('knowledge_current')
       .select('*')

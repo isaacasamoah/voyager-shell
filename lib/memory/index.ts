@@ -110,7 +110,7 @@ export const searchMemories = async (
 
     // Call RPC with pgvector string format
     // Must call .rpc() directly on client to preserve `this` binding
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any).rpc('search_memories', {
       query_embedding: toVectorString(embedding),
       match_user_id: userId,
@@ -131,7 +131,7 @@ export const searchMemories = async (
     // Touch accessed memories (fire and forget for performance)
     // Don't await - just update access tracking in background
     results.forEach((m) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      
       (supabase as any).rpc('touch_memory', { memory_id: m.id })
         .then(() => {})
         .catch(() => {
@@ -169,7 +169,7 @@ export const createMemory = async (
   const supabase = getClient()
   const embedding = await generateEmbedding(input.content)
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  
   const { data, error } = await (supabase as any)
     .from('user_memory')
     .insert({
@@ -200,7 +200,7 @@ export const getMemoriesByType = async (
 ): Promise<Memory[]> => {
   const supabase = getClient()
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  
   const { data, error } = await (supabase as any)
     .from('user_memory')
     .select('*')
@@ -226,7 +226,7 @@ export const getRecentMemories = async (
 ): Promise<Memory[]> => {
   const supabase = getClient()
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  
   const { data, error } = await (supabase as any)
     .from('user_memory')
     .select('*')
@@ -250,7 +250,7 @@ export const getImportantMemories = async (
 ): Promise<Memory[]> => {
   const supabase = getClient()
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  
   const { data, error } = await (supabase as any)
     .from('user_memory')
     .select('*')
@@ -277,7 +277,7 @@ export const updateMemory = async (
   const supabase = getClient()
   const embedding = await generateEmbedding(newContent)
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  
   const { data, error } = await (supabase as any).rpc('supersede_memory', {
     old_memory_id: memoryId,
     new_content: newContent,
@@ -292,7 +292,7 @@ export const updateMemory = async (
 
   // Fetch the new memory
   const newMemoryId = data as string
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  
   const { data: newMemory, error: fetchError } = await (supabase as any)
     .from('user_memory')
     .select('*')
@@ -313,7 +313,7 @@ export const deleteMemory = async (
 ): Promise<boolean> => {
   const supabase = getClient()
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  
   const { error } = await (supabase as any)
     .from('user_memory')
     .update({ is_active: false })
@@ -358,7 +358,7 @@ export const getMemoryStats = async (
 }> => {
   const supabase = getClient()
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  
   const { data, error } = await (supabase as any)
     .from('user_memory')
     .select('type, importance')

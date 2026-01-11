@@ -74,7 +74,7 @@ export const createVoyage = async (
 
   try {
     // Use the database function that creates voyage + adds captain
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data: voyageId, error: createError } = await (supabase as any).rpc(
       'create_voyage_with_captain',
       {
@@ -110,7 +110,7 @@ export const getVoyageById = async (voyageId: string): Promise<Voyage | null> =>
   const supabase = getClient();
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any)
       .from('voyages')
       .select('*')
@@ -137,7 +137,7 @@ export const getVoyageBySlug = async (slug: string): Promise<Voyage | null> => {
   console.log('[Voyage] Getting voyage by slug:', slug);
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any)
       .from('voyages')
       .select('*')
@@ -184,7 +184,7 @@ export const updateVoyage = async (
       updates.settings = { ...current?.config, ...input.config };
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any)
       .from('voyages')
       .update(updates)
@@ -216,7 +216,7 @@ export const getUserVoyages = async (userId: string): Promise<VoyageMembership[]
   console.log('[Voyage] Getting voyages for user:', userId);
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any).rpc('get_user_voyages', {
       p_user_id: userId,
     });
@@ -247,7 +247,7 @@ export const getUserRole = async (
   const supabase = getClient();
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any).rpc('get_voyage_role', {
       p_voyage_slug: voyageSlug,
       p_user_id: userId,
@@ -272,7 +272,7 @@ export const isCaptain = async (voyageSlug: string, userId: string): Promise<boo
   const supabase = getClient();
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any).rpc('is_voyage_captain', {
       p_voyage_slug: voyageSlug,
       p_user_id: userId,
@@ -302,7 +302,7 @@ export const getVoyageMembers = async (voyageId: string): Promise<VoyageMember[]
   console.log('[Voyage] Getting members for voyage:', voyageId);
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any)
       .from('voyage_members')
       .select(`
@@ -340,7 +340,7 @@ export const updateMemberRole = async (
   console.log('[Voyage] Updating member role:', userId, 'to', newRole);
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { error } = await (supabase as any)
       .from('voyage_members')
       .update({ role: newRole })
@@ -375,7 +375,7 @@ export const joinVoyageByCode = async (
 
   try {
     // Use the database function
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data: voyageId, error } = await (supabase as any).rpc('join_voyage_by_code', {
       p_invite_code: inviteCode,
       p_user_id: userId,
@@ -407,7 +407,7 @@ export const getVoyageByInviteCode = async (inviteCode: string): Promise<Voyage 
   console.log('[Voyage] Looking up voyage by invite code:', inviteCode);
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any)
       .from('voyages')
       .select('*')
@@ -440,7 +440,7 @@ export const regenerateInviteCode = async (
   console.log('[Voyage] Regenerating invite code for voyage:', voyageId);
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any).rpc('regenerate_voyage_invite', {
       p_voyage_id: voyageId,
       p_user_id: userId,

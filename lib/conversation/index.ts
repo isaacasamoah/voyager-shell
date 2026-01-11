@@ -124,7 +124,7 @@ export const getOrCreateActiveConversation = async (
 
     // Look for existing active session (scoped to voyage if specified)
     // Fetch full row directly to avoid redundant query
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     let query = (supabase as any)
       .from('sessions')
       .select('*')
@@ -142,7 +142,7 @@ export const getOrCreateActiveConversation = async (
 
     // Create new session if none exists
     if (!session) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      
       const { data: newSession, error: createError } = await (supabase as any)
         .from('sessions')
         .insert({
@@ -169,7 +169,7 @@ export const getOrCreateActiveConversation = async (
     console.log('[Conversation] Active session ID:', session.id)
 
     // Fetch messages for this session
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data: messages, error: messagesError } = await (supabase as any)
       .from('messages')
       .select('*')
@@ -212,7 +212,7 @@ export const loadConversationMessages = async (
   console.log('[Conversation] Loading messages for:', conversationId, 'limit:', limit)
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any)
       .from('messages')
       .select('*')
@@ -248,7 +248,7 @@ export const saveMessage = async (
   console.log('[Conversation] Saving message to:', conversationId, 'role:', role)
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any)
       .from('messages')
       .insert({
@@ -288,7 +288,7 @@ export const archiveConversation = async (
   try {
     // For admin client, we bypass auth.uid() check by updating directly
     // TODO: Use transition_session RPC once auth is wired up
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { error } = await (supabase as any)
       .from('sessions')
       .update({
@@ -334,7 +334,7 @@ export const getResumableConversations = async (
     }
 
     // Query sessions directly with voyage filtering
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     let query = (supabase as any)
       .from('sessions')
       .select(`
@@ -416,7 +416,7 @@ export const resumeConversation = async (
     // TODO: Use resume_session RPC once auth is wired up
 
     // First, check the target conversation exists and belongs to user
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data: targetSession, error: targetError } = await (supabase as any)
       .from('sessions')
       .select('*')
@@ -448,7 +448,7 @@ export const resumeConversation = async (
     }
 
     // Archive current active session (if any)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     await (supabase as any)
       .from('sessions')
       .update({
@@ -459,7 +459,7 @@ export const resumeConversation = async (
       .eq('status', 'active')
 
     // Make target session active
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { error: activateError } = await (supabase as any)
       .from('sessions')
       .update({
@@ -474,7 +474,7 @@ export const resumeConversation = async (
     }
 
     // Fetch updated session and messages
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data: updatedSession } = await (supabase as any)
       .from('sessions')
       .select('*')
@@ -509,7 +509,7 @@ export const setConversationTitle = async (
   try {
     // For admin client, update directly
     // TODO: Use set_session_title RPC once auth is wired up
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { error } = await (supabase as any)
       .from('sessions')
       .update({
@@ -545,7 +545,7 @@ export const getConversation = async (
   const supabase = getClient()
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any)
       .from('sessions')
       .select('*')
@@ -575,7 +575,7 @@ export const markConversationExtracted = async (
   console.log('[Conversation] Marking conversation as extracted:', conversationId)
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { error } = await (supabase as any)
       .from('sessions')
       .update({
@@ -604,7 +604,7 @@ export const needsTitle = async (conversationId: string): Promise<boolean> => {
   const supabase = getClient()
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any)
       .from('sessions')
       .select('title, message_count')
@@ -634,7 +634,7 @@ export const getConversationsNeedingExtraction = async (
   console.log('[Conversation] Getting conversations needing extraction for user:', userId)
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any)
       .from('sessions')
       .select('*')

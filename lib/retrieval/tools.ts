@@ -28,7 +28,7 @@ const resolveNodeId = async (shortOrFullId: string): Promise<string | null> => {
 
   // Otherwise, look up by prefix
   const supabase = getAdminClient()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  
   const { data } = await (supabase as any)
     .from('knowledge_current')
     .select('event_id')
@@ -260,7 +260,7 @@ Supports: ISO dates (2024-01-15) or relative (yesterday, last week, 3 days ago).
 
       const supabase = getAdminClient()
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      
       let dbQuery = (supabase as any)
         .from('knowledge_current')
         .select('*')

@@ -89,7 +89,7 @@ export const logRetrievalEvent = async (
   try {
     const supabase = getAdminClient();
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { data, error } = await (supabase as any)
       .from('retrieval_events')
       .insert({
@@ -131,7 +131,7 @@ export const updateRetrievalCitations = async (
   try {
     const supabase = getAdminClient();
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    
     const { error } = await (supabase as any)
       .from('retrieval_events')
       .update({
