@@ -56,6 +56,11 @@ export interface UserProfile {
   };
 }
 
+interface ComposeOptions {
+  profile?: UserProfile;
+  voyageSlug?: string;
+}
+
 /**
  * Legacy compose function for backward compatibility.
  * Uses the new modular system under the hood.
@@ -63,15 +68,17 @@ export interface UserProfile {
 export const composeSystemPrompt = async (
   userId: string,
   query: string,
-  profile?: UserProfile
+  options?: ComposeOptions
 ): Promise<{ systemPrompt: string; retrieval: RetrievalResult }> => {
+  const { profile, voyageSlug } = options ?? {};
+
   // Retrieve relevant context using existing retrieval system
-  const retrieval = await retrieveContext(userId, query);
+  const retrieval = await retrieveContext(userId, query, { voyageSlug });
 
   // Get pinned knowledge
   let pinnedKnowledge: KnowledgeItem[] = [];
   try {
-    const pinned = await getPinnedKnowledge(userId);
+    const pinned = await getPinnedKnowledge(userId, voyageSlug);
     pinnedKnowledge = pinned.map((k: KnowledgeNode) => ({
       id: k.eventId,
       content: k.content,
