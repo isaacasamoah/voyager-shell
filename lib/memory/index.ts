@@ -110,7 +110,8 @@ export const searchMemories = async (
 
     // Call RPC with pgvector string format
     // Must call .rpc() directly on client to preserve `this` binding
-    const { data, error } = await supabase.rpc('search_memories', {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase as any).rpc('search_memories', {
       query_embedding: toVectorString(embedding),
       match_user_id: userId,
       match_threshold: threshold,
@@ -130,7 +131,8 @@ export const searchMemories = async (
     // Touch accessed memories (fire and forget for performance)
     // Don't await - just update access tracking in background
     results.forEach((m) => {
-      supabase.rpc('touch_memory', { memory_id: m.id })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (supabase as any).rpc('touch_memory', { memory_id: m.id })
         .then(() => {})
         .catch(() => {
           // Ignore touch errors - not critical
@@ -275,7 +277,8 @@ export const updateMemory = async (
   const supabase = getClient()
   const embedding = await generateEmbedding(newContent)
 
-  const { data, error } = await supabase.rpc('supersede_memory', {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any).rpc('supersede_memory', {
     old_memory_id: memoryId,
     new_content: newContent,
     new_embedding: toVectorString(embedding),
