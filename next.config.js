@@ -1,5 +1,3 @@
-const { withSentryConfig } = require('@sentry/nextjs')
-
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   experimental: {
@@ -9,23 +7,27 @@ const nextConfig = {
   },
 }
 
-// Sentry configuration options
-const sentryWebpackPluginOptions = {
-  // Suppresses source map uploading logs during build
-  silent: true,
-  org: process.env.SENTRY_ORG,
-  project: process.env.SENTRY_PROJECT,
-}
+// Only use Sentry if configured
+if (process.env.SENTRY_DSN && process.env.SENTRY_ORG && process.env.SENTRY_PROJECT) {
+  const { withSentryConfig } = require('@sentry/nextjs')
 
-const sentryOptions = {
-  // Automatically tree-shake Sentry logger statements to reduce bundle size
-  widenClientFileUpload: true,
-  hideSourceMaps: true,
-  disableLogger: true,
-}
+  const sentryWebpackPluginOptions = {
+    silent: true,
+    org: process.env.SENTRY_ORG,
+    project: process.env.SENTRY_PROJECT,
+  }
 
-module.exports = withSentryConfig(
-  nextConfig,
-  sentryWebpackPluginOptions,
-  sentryOptions
-)
+  const sentryOptions = {
+    widenClientFileUpload: true,
+    hideSourceMaps: true,
+    disableLogger: true,
+  }
+
+  module.exports = withSentryConfig(
+    nextConfig,
+    sentryWebpackPluginOptions,
+    sentryOptions
+  )
+} else {
+  module.exports = nextConfig
+}
