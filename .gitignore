@@ -44,3 +44,6 @@ claude-portraits/
 
 # temporary notes
 claude-question-time.md
+
+# Vercel env files
+.env.vercel*

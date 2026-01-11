@@ -2,8 +2,18 @@
 
 // App-level providers
 // Wraps all client-side context providers
+// Uses dynamic import to avoid Supabase SDK errors during static generation
 
-import { AuthProvider } from '@/lib/auth/context';
+import dynamic from 'next/dynamic';
+
+// Dynamically import AuthProvider to prevent Supabase init during build
+const AuthProvider = dynamic(
+  () => import('@/lib/auth/context').then((mod) => mod.AuthProvider),
+  {
+    ssr: false, // Only load on client
+    loading: () => null,
+  }
+);
 
 interface ProvidersProps {
   children: React.ReactNode;
