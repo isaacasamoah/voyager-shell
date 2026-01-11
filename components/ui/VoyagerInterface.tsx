@@ -309,6 +309,13 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     // Re-focus when clicking anywhere in the document (except other inputs)
     const handleClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
+
+      // Don't steal focus if user has selected text (they might want to copy)
+      const selection = window.getSelection();
+      if (selection && selection.toString().length > 0) {
+        return;
+      }
+
       if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.tagName !== 'BUTTON') {
         focusInput();
       }

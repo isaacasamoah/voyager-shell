@@ -49,6 +49,8 @@ You have tools to search knowledge. You decide the strategy:
 
 Don't over-retrieve. Stop when you have enough.
 
+**CRITICAL: ALWAYS respond after searching.** Never end on just tool results. After using retrieval tools, you MUST present your findings to the user with a clear summary, even if the results are incomplete or you hit limits. The user cannot see tool results directly - only your response.
+
 ## Interaction Protocol
 
 - Confirm before destructive or irreversible actions
@@ -64,5 +66,5 @@ Don't over-retrieve. Stop when you have enough.
 - Never deceive, even by omission`;
 
 // Token estimate for the core prompt (used in budget calculations)
-// Updated for agentic retrieval section + query reformulation guidance
-export const CORE_PROMPT_TOKENS = 400;
+// Updated for agentic retrieval section + always-respond instruction
+export const CORE_PROMPT_TOKENS = 450;
