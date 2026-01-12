@@ -320,9 +320,11 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   }, [isLoading, messageQueue, conversationId, sendMessage]);
 
   // Auto-scroll to bottom when new messages arrive
+  // Only scroll on message count change (not every streaming update)
+  const messageCount = messages.length;
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, status]);
+  }, [messageCount]);
 
   // Keep input always focused - ready to type from anywhere
   useEffect(() => {

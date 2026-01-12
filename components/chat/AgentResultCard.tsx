@@ -1,11 +1,11 @@
 // Agent Result Card
 // Displays background agent findings that surfaced via Realtime
 //
-// Pattern: Claude as Query Compiler
-// Results appear after the worker executes Claude-generated retrieval code
+// Design: Voyager synthesizes raw findings into conversational follow-up
+// The summary is the main content, sources are expandable for transparency
 
 import React, { useState } from 'react'
-import { Lightbulb, ChevronDown, ChevronUp, X } from 'lucide-react'
+import { Sparkles, ChevronDown, ChevronUp, X, FileText } from 'lucide-react'
 
 interface Finding {
   eventId: string
@@ -21,6 +21,7 @@ interface AgentResult {
     findings: Finding[]
     confidence: number
     summary?: string
+    type?: string // 'deep_retrieval' for parallel paths
   }
 }
 
@@ -30,94 +31,88 @@ interface AgentResultCardProps {
 }
 
 export const AgentResultCard = ({ result, onDismiss }: AgentResultCardProps) => {
-  const [isExpanded, setIsExpanded] = useState(false)
+  const [showSources, setShowSources] = useState(false)
 
-  const { findings, confidence, summary } = result.result
+  const { findings, summary } = result.result
   const findingsCount = findings.length
 
-  if (findingsCount === 0) {
+  // If no findings and no summary, don't render
+  if (findingsCount === 0 && !summary) {
     return null
   }
 
   return (
-    <div className="bg-surface border border-white/10 rounded-lg p-4 animate-in slide-in-from-bottom-2 duration-300">
+    <div className="bg-gradient-to-r from-indigo-950/40 to-violet-950/30 border border-indigo-400/20 rounded-lg p-4 animate-in slide-in-from-bottom-2 duration-300">
       <div className="flex items-start gap-3">
         {/* Icon */}
         <div className="text-indigo-400 mt-0.5">
-          <Lightbulb className="w-5 h-5" />
+          <Sparkles className="w-5 h-5" />
         </div>
 
         {/* Content */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <p className="text-slate-300 text-sm font-medium">
-              I found more context...
-            </p>
-            <span className="text-xs text-slate-500">
-              {Math.round(confidence * 100)}% confident
-            </span>
-          </div>
-
+          {/* Main content: Voyager's synthesis */}
           {summary ? (
-            <p className="text-slate-400 text-sm mt-1">{summary}</p>
+            <p className="text-slate-200 leading-relaxed">{summary}</p>
           ) : (
-            <p className="text-slate-500 text-xs mt-1">
-              {findingsCount} additional item{findingsCount !== 1 ? 's' : ''} found
+            <p className="text-slate-300 text-sm">
+              Found {findingsCount} additional item{findingsCount !== 1 ? 's' : ''} that might be relevant.
             </p>
           )}
 
-          {/* Expanded findings */}
-          {isExpanded && (
-            <div className="mt-3 space-y-2">
-              {findings.slice(0, 5).map((finding, idx) => (
+          {/* Sources toggle */}
+          {findingsCount > 0 && (
+            <button
+              onClick={() => setShowSources(!showSources)}
+              className="mt-3 flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>
+                {showSources ? 'Hide' : 'Show'} {findingsCount} source{findingsCount !== 1 ? 's' : ''}
+              </span>
+              {showSources ? (
+                <ChevronUp className="w-3 h-3" />
+              ) : (
+                <ChevronDown className="w-3 h-3" />
+              )}
+            </button>
+          )}
+
+          {/* Expanded sources */}
+          {showSources && (
+            <div className="mt-3 space-y-2 border-t border-white/5 pt-3">
+              {findings.map((finding, idx) => (
                 <div
                   key={finding.eventId || idx}
-                  className="bg-black/30 rounded p-2 text-sm"
+                  className="bg-black/30 rounded p-3 text-sm"
                 >
-                  <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
-                    <span className="font-mono">
-                      {finding.eventId?.slice(0, 8) || 'unknown'}
-                    </span>
+                  <div className="flex items-center gap-2 text-xs text-slate-500 mb-1.5">
                     {finding.isPinned && (
-                      <span className="text-amber-400">[PINNED]</span>
+                      <span className="text-amber-400 font-medium">Pinned</span>
                     )}
                     {finding.similarity && (
-                      <span>{Math.round(finding.similarity * 100)}%</span>
+                      <span className="text-slate-500">
+                        {Math.round(finding.similarity * 100)}% match
+                      </span>
                     )}
                   </div>
-                  <p className="text-slate-300 line-clamp-3">{finding.content}</p>
+                  <p className="text-slate-300 whitespace-pre-wrap">
+                    {finding.content}
+                  </p>
                 </div>
               ))}
-              {findingsCount > 5 && (
-                <p className="text-xs text-slate-500">
-                  +{findingsCount - 5} more
-                </p>
-              )}
             </div>
           )}
         </div>
 
-        {/* Actions */}
-        <div className="flex gap-1">
-          <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="p-1.5 hover:bg-white/5 rounded text-slate-400 hover:text-slate-300 transition-colors"
-            title={isExpanded ? 'Collapse' : 'Expand'}
-          >
-            {isExpanded ? (
-              <ChevronUp className="w-4 h-4" />
-            ) : (
-              <ChevronDown className="w-4 h-4" />
-            )}
-          </button>
-          <button
-            onClick={onDismiss}
-            className="p-1.5 hover:bg-white/5 rounded text-slate-500 hover:text-slate-400 transition-colors"
-            title="Dismiss"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+        {/* Dismiss button */}
+        <button
+          onClick={onDismiss}
+          className="p-1.5 hover:bg-white/5 rounded text-slate-500 hover:text-slate-400 transition-colors"
+          title="Dismiss"
+        >
+          <X className="w-4 h-4" />
+        </button>
       </div>
     </div>
   )

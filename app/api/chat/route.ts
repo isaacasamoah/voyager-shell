@@ -1,5 +1,5 @@
 import { anthropic } from '@ai-sdk/anthropic';
-import { streamText, APICallError, stepCountIs } from 'ai';
+import { streamText, APICallError } from 'ai';
 import { waitUntil } from '@vercel/functions';
 import { composeSystemPrompt, getBasePrompt } from '@/lib/prompts';
 import {
@@ -12,6 +12,7 @@ import { callGeminiJSON } from '@/lib/gemini/client';
 import { emitMessageEvent, type KnowledgeNode } from '@/lib/knowledge';
 import { logRetrievalEvent, logCitations, createRetrievalTools } from '@/lib/retrieval';
 import { getAuthenticatedUserId } from '@/lib/auth';
+import { runDeepRetrieval } from '@/lib/agents/deep-retrieval';
 
 export const maxDuration = 30;
 
@@ -96,25 +97,27 @@ interface SimpleMessage {
 
 // Convert UIMessage format (parts array) to simple message format
 const convertToSimpleMessages = (messages: UIMessage[]): SimpleMessage[] => {
-  return messages.map((msg) => {
-    // Extract text content from parts array (AI SDK v6 format)
-    let content: string;
-    if (msg.parts && Array.isArray(msg.parts)) {
-      content = msg.parts
-        .filter((part) => part.type === 'text' && part.text)
-        .map((part) => part.text)
-        .join('');
-    } else if (typeof msg.content === 'string') {
-      content = msg.content;
-    } else {
-      content = '';
-    }
+  return messages
+    .map((msg) => {
+      // Extract text content from parts array (AI SDK v6 format)
+      let content: string;
+      if (msg.parts && Array.isArray(msg.parts)) {
+        content = msg.parts
+          .filter((part) => part.type === 'text' && part.text)
+          .map((part) => part.text)
+          .join('');
+      } else if (typeof msg.content === 'string') {
+        content = msg.content;
+      } else {
+        content = '';
+      }
 
-    return {
-      role: msg.role,
-      content,
-    };
-  });
+      return {
+        role: msg.role,
+        content,
+      };
+    })
+    .filter((msg) => msg.content.trim() !== ''); // Filter out empty messages
 };
 
 export const POST = async (req: Request) => {
@@ -209,22 +212,50 @@ export const POST = async (req: Request) => {
       systemPrompt = getBasePrompt();
     }
 
-    // Create retrieval tools for agentic search
-    // Claude decides when and how to dig deeper into knowledge
-    const retrievalTools = createRetrievalTools({
+    // Create retrieval tools (kept for reference, not currently used)
+    const _retrievalTools = createRetrievalTools({
       userId,
       voyageSlug,
       conversationId,
-      waitUntil, // For immediate background agent execution
+      waitUntil,
     });
 
+    // Build conversation context for deep retrieval
+    const conversationContext = simpleMessages
+      .slice(-6)
+      .map((m) => `${m.role}: ${m.content.slice(0, 200)}`);
+
+    // Spawn deep retrieval in parallel (non-blocking)
+    // This implements "initial results THEN more detail when ready"
+    if (conversationId && queryText) {
+      waitUntil(
+        runDeepRetrieval({
+          query: queryText,
+          conversationId,
+          userId,
+          voyageSlug,
+          preRetrievalResults: retrievedKnowledge,
+          conversationContext,
+        })
+      );
+    }
+
+    // Primary Voyager (no retrieval tools - uses pre-fetched context)
+    // Deep retrieval runs in parallel via waitUntil above
     const result = streamText({
       model: anthropic('claude-sonnet-4-20250514'),
       system: systemPrompt,
       messages: simpleMessages,
-      tools: retrievalTools,
-      stopWhen: stepCountIs(5), // Allow up to 5 tool-calling steps per response
-      onFinish: async ({ text }) => {
+      // tools: retrievalTools,  // Disabled - see proposal
+      // maxSteps: 5,
+      onFinish: async ({ text, finishReason, usage }) => {
+        console.log('[Chat] onFinish:', {
+          hasText: !!text,
+          textLength: text?.length ?? 0,
+          finishReason,
+          usage
+        });
+
         // Save assistant response after streaming completes
         if (conversationId && text) {
           try {

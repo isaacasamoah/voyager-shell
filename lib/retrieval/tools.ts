@@ -59,7 +59,7 @@ export interface ToolContext {
 
 const formatKnowledgeResult = (nodes: KnowledgeNode[]): string => {
   if (nodes.length === 0) {
-    return 'No results found.'
+    return 'No results found. NOW RESPOND TO THE USER - tell them what you searched for and that you found nothing relevant. Do not call more tools without responding first.'
   }
 
   return nodes
@@ -75,7 +75,7 @@ const formatKnowledgeResult = (nodes: KnowledgeNode[]): string => {
 
 const formatGrepResult = (results: GrepResult[]): string => {
   if (results.length === 0) {
-    return 'No exact matches found.'
+    return 'No exact matches found. NOW RESPOND TO THE USER with what you have so far.'
   }
 
   return results
@@ -177,7 +177,7 @@ export const createRetrievalTools = (ctx: ToolContext) => ({
     description: `Search knowledge by semantic similarity.
 Use when: The query is conceptual or you don't know exact terms.
 Returns: Results ranked by relevance with similarity scores.
-Strategy tip: Start here, then use keyword_grep for pinpoint accuracy.`,
+IMPORTANT: After this search, respond to the user immediately with what you found. If you need deeper search, include spawn_background_agent in the SAME response as your text.`,
     inputSchema: semanticSearchSchema,
     execute: async (input) => {
       const { query, limit, threshold } = input
@@ -186,7 +186,8 @@ Strategy tip: Start here, then use keyword_grep for pinpoint accuracy.`,
         limit: Math.min(limit, 20),
         voyageSlug: ctx.voyageSlug,
       })
-      return formatKnowledgeResult(results)
+      const formatted = formatKnowledgeResult(results)
+      return `${formatted}\n\n---\nYou have search results. NOW RESPOND TO THE USER with a summary. If you want deeper search, output your text response AND spawn_background_agent together.`
     },
   }),
 
@@ -396,7 +397,7 @@ return { findings: dedupe([...broad, ...decisions.flat(), ...exact]), confidence
           ctx.waitUntil(executeTask())
         }
 
-        return `Background retrieval started (task: ${taskId.slice(0, 8)}). Results will surface when ready. Continue your response - don't wait.`
+        return `Background agent spawned (${taskId.slice(0, 8)}). Now respond to the user with what you found so far.`
       } catch (error) {
         console.error('[spawn_background_agent] Failed to enqueue:', error)
         return `Failed to spawn background agent: ${error instanceof Error ? error.message : 'Unknown error'}`

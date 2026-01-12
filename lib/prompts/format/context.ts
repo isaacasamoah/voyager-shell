@@ -20,7 +20,11 @@ export const formatContext = (
     return '';
   }
 
-  const sections: string[] = ['# Relevant Knowledge'];
+  const sections: string[] = [
+    '# Relevant Knowledge (Pre-Retrieved)',
+    '',
+    '> I already searched for context relevant to this conversation. USE THIS FIRST before calling any retrieval tools. Only search if this context is insufficient.',
+  ];
 
   // Sort by relevance (highest first)
   const sorted = [...context.items].sort((a, b) => b.relevance - a.relevance);
