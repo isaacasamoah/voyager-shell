@@ -522,8 +522,9 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   }, []);
 
   // Handle /switch command - switch to a specific voyage
+  const PERSONAL_SYNONYMS = ['personal', 'solo', 'default', 'home', 'my', 'mine', ''];
   const handleSwitchVoyage = useCallback((slug: string) => {
-    if (slug === 'personal' || slug === '') {
+    if (PERSONAL_SYNONYMS.includes(slug)) {
       setCurrentVoyage(null);
       setShowVoyagePicker(false);
       setFeedbackMessage('Switched to Personal context.');
