@@ -2,6 +2,7 @@
 // Manages session lifecycle, message persistence, and conversation resumption
 
 import { getAdminClient } from '@/lib/supabase/admin'
+import { getClientForContext } from '@/lib/supabase/authenticated'
 import { getVoyageBySlug } from '@/lib/voyage'
 import type {
   Message,
@@ -11,9 +12,11 @@ import type {
   MessageRole,
 } from '@/lib/supabase/types'
 
-// Use admin client for conversation operations (bypasses RLS)
-// TODO: Switch to user-scoped client once auth is wired up
-const getClient = () => getAdminClient()
+// Admin client for operations without user context (legacy)
+const getAdminSupabase = () => getAdminClient()
+
+// Authenticated client for user-scoped operations
+const getClientForUser = (userId: string) => getClientForContext({ userId })
 
 // Options for conversation operations
 interface ConversationOptions {
@@ -106,7 +109,7 @@ export const getOrCreateActiveConversation = async (
   userId: string,
   options?: ConversationOptions
 ): Promise<ConversationWithMessages | null> => {
-  const supabase = getClient()
+  const supabase = getClientForUser(userId)
   const { voyageSlug } = options ?? {}
 
   console.log('[Conversation] Getting or creating active conversation for user:', userId, 'voyage:', voyageSlug ?? 'personal')
@@ -208,7 +211,7 @@ export const loadConversationMessages = async (
   conversationId: string,
   limit = 100
 ): Promise<ConversationMessage[]> => {
-  const supabase = getClient()
+  const supabase = getAdminSupabase()
   console.log('[Conversation] Loading messages for:', conversationId, 'limit:', limit)
 
   try {
@@ -244,7 +247,7 @@ export const saveMessage = async (
   role: MessageRole,
   content: string
 ): Promise<ConversationMessage | null> => {
-  const supabase = getClient()
+  const supabase = getAdminSupabase()
   console.log('[Conversation] Saving message to:', conversationId, 'role:', role)
 
   try {
@@ -282,12 +285,12 @@ export const saveMessage = async (
 export const archiveConversation = async (
   conversationId: string
 ): Promise<boolean> => {
-  const supabase = getClient()
+  const supabase = getAdminSupabase()
   console.log('[Conversation] Archiving conversation:', conversationId)
 
   try {
-    // For admin client, we bypass auth.uid() check by updating directly
-    // TODO: Use transition_session RPC once auth is wired up
+    // Direct update - could use transition_session RPC for atomicity
+    // Note: Auth is now wired, but direct update works for this use case
     
     const { error } = await (supabase as any)
       .from('sessions')
@@ -320,7 +323,7 @@ export const getResumableConversations = async (
   limit = 10,
   options?: ConversationOptions
 ): Promise<ResumableConversation[]> => {
-  const supabase = getClient()
+  const supabase = getClientForUser(userId)
   const { voyageSlug } = options ?? {}
 
   console.log('[Conversation] Getting resumable conversations for user:', userId, 'voyage:', voyageSlug ?? 'personal')
@@ -408,12 +411,12 @@ export const resumeConversation = async (
   conversationId: string,
   userId: string
 ): Promise<ConversationWithMessages | null> => {
-  const supabase = getClient()
+  const supabase = getClientForUser(userId)
   console.log('[Conversation] Resuming conversation:', conversationId)
 
   try {
-    // For admin client, we handle the resume logic directly
-    // TODO: Use resume_session RPC once auth is wired up
+    // Direct implementation - could use resume_session RPC for atomicity
+    // Note: Auth is now wired, but multi-step approach works
 
     // First, check the target conversation exists and belongs to user
     
@@ -503,12 +506,12 @@ export const setConversationTitle = async (
   conversationId: string,
   title: string
 ): Promise<boolean> => {
-  const supabase = getClient()
+  const supabase = getAdminSupabase()
   console.log('[Conversation] Setting title for:', conversationId, 'title:', title)
 
   try {
-    // For admin client, update directly
-    // TODO: Use set_session_title RPC once auth is wired up
+    // Direct update - could use set_session_title RPC for validation
+    // Note: Auth is now wired, but direct update works for this use case
     
     const { error } = await (supabase as any)
       .from('sessions')
@@ -542,7 +545,7 @@ export const setConversationTitle = async (
 export const getConversation = async (
   conversationId: string
 ): Promise<Conversation | null> => {
-  const supabase = getClient()
+  const supabase = getAdminSupabase()
 
   try {
     
@@ -571,7 +574,7 @@ export const getConversation = async (
 export const markConversationExtracted = async (
   conversationId: string
 ): Promise<boolean> => {
-  const supabase = getClient()
+  const supabase = getAdminSupabase()
   console.log('[Conversation] Marking conversation as extracted:', conversationId)
 
   try {
@@ -601,7 +604,7 @@ export const markConversationExtracted = async (
  * Check if a conversation needs a title (has enough messages but no title).
  */
 export const needsTitle = async (conversationId: string): Promise<boolean> => {
-  const supabase = getClient()
+  const supabase = getAdminSupabase()
 
   try {
     
@@ -630,7 +633,7 @@ export const getConversationsNeedingExtraction = async (
   userId: string,
   limit = 10
 ): Promise<Conversation[]> => {
-  const supabase = getClient()
+  const supabase = getClientForUser(userId)
   console.log('[Conversation] Getting conversations needing extraction for user:', userId)
 
   try {

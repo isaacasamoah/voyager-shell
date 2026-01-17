@@ -17,20 +17,20 @@ import {
   type KnowledgeNode,
   type GrepResult,
 } from '@/lib/knowledge'
-import { getAdminClient } from '@/lib/supabase/admin'
+import { getClientForContext } from '@/lib/supabase/authenticated'
 import { enqueueAgentTask, completeTask, failTask } from '@/lib/agents/queue'
 import { executeRetrievalCode } from '@/lib/agents/executor'
 
 // Resolve short ID (8 chars) to full UUID
-const resolveNodeId = async (shortOrFullId: string): Promise<string | null> => {
+const resolveNodeId = async (shortOrFullId: string, ctx: ToolContext): Promise<string | null> => {
   // If it's already a full UUID (36 chars with dashes), return as-is
   if (shortOrFullId.length === 36 && shortOrFullId.includes('-')) {
     return shortOrFullId
   }
 
-  // Otherwise, look up by prefix
-  const supabase = getAdminClient()
-  
+  // Otherwise, look up by prefix (scoped to user via RLS)
+  const supabase = getClientForContext({ userId: ctx.userId })
+
   const { data } = await (supabase as any)
     .from('knowledge_current')
     .select('event_id')
@@ -174,10 +174,9 @@ export const createRetrievalTools = (ctx: ToolContext) => ({
    * Returns results ranked by relevance.
    */
   semantic_search: tool({
-    description: `Search knowledge by semantic similarity.
-Use when: The query is conceptual or you don't know exact terms.
-Returns: Results ranked by relevance with similarity scores.
-IMPORTANT: After this search, respond to the user immediately with what you found. If you need deeper search, include spawn_background_agent in the SAME response as your text.`,
+    description: `Search by concept/meaning. Use when: exploring topics, finding related content, natural language queries, user asks about ideas or themes.
+Returns results ranked by relevance with similarity scores.
+After search, respond to user immediately. For deeper search, include spawn_background_agent in SAME response.`,
     inputSchema: semanticSearchSchema,
     execute: async (input) => {
       const { query, limit, threshold } = input
@@ -197,10 +196,8 @@ IMPORTANT: After this search, respond to the user immediately with what you foun
    * Returns matches with highlighted context.
    */
   keyword_grep: tool({
-    description: `Exact keyword/phrase search across knowledge.
-Use when: You know the exact term, name, or phrase to find.
-Returns: Matches with highlighted context around the match.
-Strategy tip: Use after semantic_search to find specific quotes or terms.`,
+    description: `Exact phrase match. Use when: specific term, literal string, quoted text, proper names, exact wording like "exactly this phrase".
+Returns matches with highlighted context. Good for finding specific quotes or terminology after semantic_search.`,
     inputSchema: keywordGrepSchema,
     execute: async (input) => {
       const { pattern, caseSensitive, limit } = input
@@ -219,15 +216,12 @@ Strategy tip: Use after semantic_search to find specific quotes or terms.`,
    * Returns nodes connected to the given node.
    */
   get_connected: tool({
-    description: `Get knowledge connected to a specific node.
-Use when: You found a relevant node and want to explore related knowledge.
-Returns: Nodes connected via graph edges (supports, contradicts, supersedes, etc).
-Strategy tip: Use after finding a topic cluster to discover related decisions, facts, entities.
-Note: Use the short ID from search results (e.g. "abc12345").`,
+    description: `Follow graph edges. Use when: finding context around a node, exploring related content, understanding connections between topics.
+Returns nodes linked via edges (supports, contradicts, supersedes). Use short ID from search results (e.g. "abc12345").`,
     inputSchema: getConnectedSchema,
     execute: async (input) => {
       const { nodeId } = input
-      const fullId = await resolveNodeId(nodeId)
+      const fullId = await resolveNodeId(nodeId, ctx)
       if (!fullId) {
         return `No node found matching ID "${nodeId}"`
       }
@@ -260,19 +254,16 @@ Returns: Full node details for the requested IDs.`,
    * Use for temporal queries like "what did we discuss last week?"
    */
   search_by_time: tool({
-    description: `Search knowledge within a time range.
-Use when: The user asks about recent discussions, or "last week", "yesterday", etc.
-Returns: Knowledge from the specified time period, newest first.
-Supports: ISO dates (2024-01-15) or relative (yesterday, last week, 3 days ago).`,
+    description: `Temporal queries. Use when: "last week", "recently", "when did we", timeline questions, date-specific searches.
+Returns knowledge from time period, newest first. Supports ISO dates (2024-01-15) or relative (yesterday, last week, 3 days ago).`,
     inputSchema: searchByTimeSchema,
     execute: async (input) => {
       const { since, until, query, limit } = input
       const sinceDate = parseRelativeDate(since)
       const untilDate = until ? parseRelativeDate(until) : new Date()
 
-      const supabase = getAdminClient()
+      const supabase = getClientForContext({ userId: ctx.userId })
 
-      
       let dbQuery = (supabase as any)
         .from('knowledge_current')
         .select('*')

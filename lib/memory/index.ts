@@ -5,9 +5,9 @@ import OpenAI from 'openai'
 import { getAdminClient } from '@/lib/supabase/admin'
 import type { MemoryType } from '@/lib/supabase/types'
 
-// Use admin client for memory operations (bypasses RLS)
-// TODO: Switch to user-scoped client once auth is wired up
-const getClient = () => getAdminClient()
+// Admin client for memory operations (legacy memory system)
+// Note: Knowledge system (lib/knowledge/) is the primary store now
+const getAdminSupabase = () => getAdminClient()
 
 // Lazy-initialize OpenAI client to avoid build-time errors
 let _openai: OpenAI | null = null
@@ -102,7 +102,7 @@ export const searchMemories = async (
   const { threshold = 0.7, limit = 10 } = options
 
   try {
-    const supabase = getClient()
+    const supabase = getAdminSupabase()
     console.log('[Memory] Client created, type:', typeof supabase, 'rpc:', typeof supabase?.rpc)
 
     const embedding = await generateEmbedding(query)
@@ -166,7 +166,7 @@ export const searchMemories = async (
 export const createMemory = async (
   input: CreateMemoryInput
 ): Promise<Memory> => {
-  const supabase = getClient()
+  const supabase = getAdminSupabase()
   const embedding = await generateEmbedding(input.content)
 
   
@@ -198,7 +198,7 @@ export const getMemoriesByType = async (
   type: MemoryType,
   limit = 10
 ): Promise<Memory[]> => {
-  const supabase = getClient()
+  const supabase = getAdminSupabase()
 
   
   const { data, error } = await (supabase as any)
@@ -224,7 +224,7 @@ export const getRecentMemories = async (
   userId: string,
   limit = 20
 ): Promise<Memory[]> => {
-  const supabase = getClient()
+  const supabase = getAdminSupabase()
 
   
   const { data, error } = await (supabase as any)
@@ -248,7 +248,7 @@ export const getImportantMemories = async (
   userId: string,
   limit = 10
 ): Promise<Memory[]> => {
-  const supabase = getClient()
+  const supabase = getAdminSupabase()
 
   
   const { data, error } = await (supabase as any)
@@ -274,7 +274,7 @@ export const updateMemory = async (
   newContent: string,
   newImportance?: number
 ): Promise<Memory> => {
-  const supabase = getClient()
+  const supabase = getAdminSupabase()
   const embedding = await generateEmbedding(newContent)
 
   
@@ -311,7 +311,7 @@ export const deleteMemory = async (
   userId: string,
   memoryId: string
 ): Promise<boolean> => {
-  const supabase = getClient()
+  const supabase = getAdminSupabase()
 
   
   const { error } = await (supabase as any)
@@ -356,7 +356,7 @@ export const getMemoryStats = async (
   byType: Record<MemoryType, number>
   avgImportance: number
 }> => {
-  const supabase = getClient()
+  const supabase = getAdminSupabase()
 
   
   const { data, error } = await (supabase as any)

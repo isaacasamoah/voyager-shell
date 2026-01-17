@@ -2,6 +2,7 @@
 // Manages background retrieval tasks for the "Claude as Query Compiler" pattern
 
 import { getAdminClient } from '@/lib/supabase/admin'
+import { getClientForContext } from '@/lib/supabase/authenticated'
 
 // =============================================================================
 // Types
@@ -52,7 +53,8 @@ export interface EnqueueParams {
  * Called by the spawn_background_agent tool.
  */
 export async function enqueueAgentTask(params: EnqueueParams): Promise<string> {
-  const supabase = getAdminClient()
+  // Use authenticated client - user is creating their own task
+  const supabase = getClientForContext({ userId: params.userId })
 
   // Note: Using type assertion until we regenerate Supabase types
   const { data, error } = await (supabase as any)

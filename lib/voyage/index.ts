@@ -18,9 +18,9 @@ import type {
 // Re-export types
 export * from './types';
 
-// Use admin client for voyage operations
-// TODO: Switch to user-scoped client once RLS is fully tested
-const getClient = () => getAdminClient();
+// Admin client for voyage operations (team management, cross-user queries)
+// Note: User membership checks use userId in params
+const getAdminSupabase = () => getAdminClient();
 
 // =============================================================================
 // TRANSFORM FUNCTIONS
@@ -69,7 +69,7 @@ export const createVoyage = async (
   input: CreateVoyageInput,
   userId: string
 ): Promise<Voyage | null> => {
-  const supabase = getClient();
+  const supabase = getAdminSupabase();
   console.log('[Voyage] Creating voyage:', input.name, 'by user:', userId);
 
   try {
@@ -107,7 +107,7 @@ export const createVoyage = async (
  * Get a voyage by its ID.
  */
 export const getVoyageById = async (voyageId: string): Promise<Voyage | null> => {
-  const supabase = getClient();
+  const supabase = getAdminSupabase();
 
   try {
     
@@ -133,7 +133,7 @@ export const getVoyageById = async (voyageId: string): Promise<Voyage | null> =>
  * Get a voyage by its slug.
  */
 export const getVoyageBySlug = async (slug: string): Promise<Voyage | null> => {
-  const supabase = getClient();
+  const supabase = getAdminSupabase();
   console.log('[Voyage] Getting voyage by slug:', slug);
 
   try {
@@ -167,7 +167,7 @@ export const updateVoyage = async (
   voyageId: string,
   input: UpdateVoyageInput
 ): Promise<Voyage | null> => {
-  const supabase = getClient();
+  const supabase = getAdminSupabase();
   console.log('[Voyage] Updating voyage:', voyageId);
 
   try {
@@ -212,7 +212,7 @@ export const updateVoyage = async (
  * Get all voyages a user is a member of.
  */
 export const getUserVoyages = async (userId: string): Promise<VoyageMembership[]> => {
-  const supabase = getClient();
+  const supabase = getAdminSupabase();
   console.log('[Voyage] Getting voyages for user:', userId);
 
   try {
@@ -244,7 +244,7 @@ export const getUserRole = async (
   voyageSlug: string,
   userId: string
 ): Promise<VoyageRole | null> => {
-  const supabase = getClient();
+  const supabase = getAdminSupabase();
 
   try {
     
@@ -269,7 +269,7 @@ export const getUserRole = async (
  * Check if user is captain of a voyage.
  */
 export const isCaptain = async (voyageSlug: string, userId: string): Promise<boolean> => {
-  const supabase = getClient();
+  const supabase = getAdminSupabase();
 
   try {
     
@@ -298,7 +298,7 @@ export const isCaptain = async (voyageSlug: string, userId: string): Promise<boo
  * Get all members of a voyage.
  */
 export const getVoyageMembers = async (voyageId: string): Promise<VoyageMember[]> => {
-  const supabase = getClient();
+  const supabase = getAdminSupabase();
   console.log('[Voyage] Getting members for voyage:', voyageId);
 
   try {
@@ -336,7 +336,7 @@ export const updateMemberRole = async (
   userId: string,
   newRole: VoyageRole
 ): Promise<boolean> => {
-  const supabase = getClient();
+  const supabase = getAdminSupabase();
   console.log('[Voyage] Updating member role:', userId, 'to', newRole);
 
   try {
@@ -370,7 +370,7 @@ export const joinVoyageByCode = async (
   inviteCode: string,
   userId: string
 ): Promise<Voyage | null> => {
-  const supabase = getClient();
+  const supabase = getAdminSupabase();
   console.log('[Voyage] Joining voyage with code:', inviteCode);
 
   try {
@@ -403,7 +403,7 @@ export const joinVoyageByCode = async (
  * Get voyage by invite code (for preview before joining).
  */
 export const getVoyageByInviteCode = async (inviteCode: string): Promise<Voyage | null> => {
-  const supabase = getClient();
+  const supabase = getAdminSupabase();
   console.log('[Voyage] Looking up voyage by invite code:', inviteCode);
 
   try {
@@ -436,7 +436,7 @@ export const regenerateInviteCode = async (
   voyageId: string,
   userId: string
 ): Promise<string | null> => {
-  const supabase = getClient();
+  const supabase = getAdminSupabase();
   console.log('[Voyage] Regenerating invite code for voyage:', voyageId);
 
   try {

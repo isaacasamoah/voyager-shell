@@ -111,8 +111,8 @@ const createBoundFunctions = (ctx: ExecutionContext) => ({
     since: string,
     opts?: { until?: string; query?: string; limit?: number }
   ): Promise<KnowledgeNode[]> => {
-    const { getAdminClient } = await import('@/lib/supabase/admin')
-    const supabase = getAdminClient()
+    const { getClientForContext } = await import('@/lib/supabase/authenticated')
+    const supabase = getClientForContext({ userId: ctx.userId })
 
     // Parse relative dates
     const parseDate = (input: string): Date => {

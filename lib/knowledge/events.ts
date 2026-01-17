@@ -10,9 +10,9 @@ import OpenAI from 'openai'
 import { getAdminClient } from '@/lib/supabase/admin'
 import type { MessageRole } from '@/lib/supabase/types'
 
-// Use admin client for knowledge operations (bypasses RLS)
-// TODO: Switch to user-scoped client once auth is wired up
-const getClient = () => getAdminClient()
+// Admin client for event creation (internal operations, often without user context)
+// User-scoped operations use authenticated client in search.ts
+const getAdminSupabase = () => getAdminClient()
 
 // Lazy-initialize OpenAI client to avoid build-time errors
 let _openai: OpenAI | null = null
@@ -119,7 +119,7 @@ const autoLinkByEntities = async (
 ): Promise<void> => {
   if (entities.length === 0) return
 
-  const supabase = getClient()
+  const supabase = getAdminSupabase()
 
   // Find existing events with overlapping entities (not this event)
   
@@ -211,7 +211,7 @@ const createSourceEvent = async (params: CreateSourceEventParams): Promise<strin
   } = params
 
   try {
-    const supabase = getClient()
+    const supabase = getAdminSupabase()
 
     // Insert the source event
     // The trigger creates knowledge_current row with the content
@@ -361,7 +361,7 @@ export const quietKnowledge = async (
   }
 ): Promise<boolean> => {
   try {
-    const supabase = getClient()
+    const supabase = getAdminSupabase()
 
     
     const { error } = await (supabase as any)
@@ -403,7 +403,7 @@ export const pinKnowledge = async (
   }
 ): Promise<boolean> => {
   try {
-    const supabase = getClient()
+    const supabase = getAdminSupabase()
 
     
     const { error } = await (supabase as any)
@@ -443,7 +443,7 @@ export const activateKnowledge = async (
   }
 ): Promise<boolean> => {
   try {
-    const supabase = getClient()
+    const supabase = getAdminSupabase()
 
     
     const { error } = await (supabase as any)

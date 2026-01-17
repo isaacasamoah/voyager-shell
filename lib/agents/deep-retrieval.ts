@@ -9,11 +9,13 @@
 // 5. Results surface via Realtime (agent_tasks table)
 
 import { generateText } from 'ai'
-import { anthropic } from '@ai-sdk/anthropic'
 import { callGemini } from '@/lib/gemini/client'
 import { executeRetrievalCode, type RetrievalResult } from './executor'
-import { getAdminClient } from '@/lib/supabase/admin'
+import { getClientForContext } from '@/lib/supabase/authenticated'
 import type { KnowledgeNode } from '@/lib/knowledge'
+import { modelRouter } from '@/lib/models'
+import { classifySearchDepth } from './depth-classifier'
+import { IF_DECISION_PROMPT, HOW_STRATEGY_PROMPT, SYNTHESIS_PROMPT } from './primitives'
 
 // =============================================================================
 // Types
@@ -51,23 +53,6 @@ async function decideIfRetrievalNeeded(input: DeepRetrievalInput): Promise<IfDec
   const hasStrongMatch = topSimilarity > 0.75
   const resultCount = input.preRetrievalResults.length
 
-  const systemPrompt = `You decide if a query needs deep retrieval beyond what was already pre-fetched.
-
-Say NO for:
-- Greetings, acknowledgments, simple thank yous
-- Questions where pre-retrieval found strong matches (similarity > 0.75)
-- Follow-up questions about information already in the conversation
-- Simple factual questions already answered in context
-
-Say YES for:
-- Complex queries spanning multiple topics or time periods
-- Requests for comprehensive summaries or overviews
-- Questions about history, timelines, or changes over time
-- When pre-retrieval found weak or no matches
-- Explicit requests to "find more" or "search deeper"
-
-Be conservative. Only say YES when deeper search would actually add value.`
-
   const userPrompt = `Query: "${input.query}"
 
 Pre-retrieval results: ${resultCount} items found
@@ -81,7 +66,7 @@ Should I do deep retrieval? Answer YES or NO, then a brief reason (one sentence)
 
   try {
     const response = await callGemini({
-      systemPrompt,
+      systemPrompt: IF_DECISION_PROMPT,
       userPrompt,
       temperature: 0.1,
       maxTokens: 100,
@@ -112,27 +97,6 @@ async function generateRetrievalStrategy(
   input: DeepRetrievalInput,
   ifReason: string
 ): Promise<RetrievalStrategy> {
-  const systemPrompt = `You are a retrieval specialist. Generate JavaScript code to deeply search knowledge for the user's query.
-
-Available functions:
-- semanticSearch(query, { limit?, threshold? }) - Returns nodes with: eventId, content, similarity
-- keywordGrep(pattern, { caseSensitive?, limit? }) - Returns nodes with: eventId, content
-- getConnected(nodeId) - Follow graph edges. IMPORTANT: Pass node.eventId (not node.id)
-- searchByTime(since, { until?, query?, limit? }) - Temporal queries ("last week", "yesterday")
-- getNodes(ids) - Fetch nodes by ID array
-- dedupe(nodes) - Remove duplicates by eventId
-
-Node properties: { eventId, content, similarity?, isPinned?, connectedTo? }
-Use node.eventId when calling getConnected, not node.id.
-
-Strategy chains:
-- semantic → getConnected → keywordGrep (concept → context → precision)
-- searchByTime → semantic (when → what)
-
-Return: { findings: [...nodes], confidence: 0-1, summary?: "brief explanation" }
-
-Write clean, async JavaScript. Focus on effectiveness.`
-
   const userPrompt = `Query: "${input.query}"
 
 Decision context: ${ifReason}
@@ -144,8 +108,8 @@ Write retrieval code to deeply search for information about this query. Return {
 
   try {
     const response = await generateText({
-      model: anthropic('claude-sonnet-4-20250514'),
-      system: systemPrompt,
+      model: modelRouter.select({ task: 'synthesis', quality: 'balanced' }),
+      system: HOW_STRATEGY_PROMPT,
       prompt: userPrompt,
     })
 
@@ -182,17 +146,6 @@ async function synthesizeFindings(
     return '' // Nothing to synthesize
   }
 
-  const systemPrompt = `You are Voyager, continuing a conversation.
-The user asked a question and you already gave an initial response.
-Now you have additional context from a deeper search.
-
-Write a brief, natural follow-up (2-4 sentences).
-Start with "I found more context..." or "Also relevant..." or "Looking deeper, I found..."
-Don't repeat what was likely in the initial response.
-Speak conversationally, not as a list.
-If the findings add significant new information, highlight it.
-If the findings mostly confirm the initial response, say so briefly.`
-
   const findingsText = findings.findings
     .slice(0, 5)
     .map((f, i) => `${i + 1}. ${f.content.slice(0, 300)}${f.content.length > 300 ? '...' : ''}`)
@@ -210,8 +163,8 @@ Write a conversational follow-up to share these findings:`
 
   try {
     const response = await generateText({
-      model: anthropic('claude-sonnet-4-20250514'),
-      system: systemPrompt,
+      model: modelRouter.select({ task: 'synthesis', quality: 'balanced' }),
+      system: SYNTHESIS_PROMPT,
       prompt: userPrompt,
     })
 
@@ -239,7 +192,7 @@ async function saveAgentResult(
     confidence: number
   }
 ): Promise<void> {
-  const supabase = getAdminClient()
+  const supabase = getClientForContext({ userId })
 
   // Note: Using type assertion until we regenerate Supabase types
   const { error } = await (supabase as any)
@@ -288,8 +241,25 @@ export async function runDeepRetrieval(input: DeepRetrievalInput): Promise<void>
 
   console.log('[DeepRetrieval] Starting for query:', input.query.slice(0, 50) + '...')
 
-  // Step 1: IF decision (Gemini Flash - fast)
-  const ifDecision = await decideIfRetrievalNeeded(input)
+  // Step 0: Depth classification (fast heuristics)
+  const depth = classifySearchDepth(input.query)
+  console.log('[DeepRetrieval] Depth classified as:', depth)
+
+  // Quick queries skip deep path entirely
+  if (depth === 'quick') {
+    console.log('[DeepRetrieval] Skipping - quick query, pre-retrieval sufficient')
+    return
+  }
+
+  // Comprehensive queries skip IF decision - always go deep
+  let ifDecision: IfDecision
+  if (depth === 'comprehensive') {
+    console.log('[DeepRetrieval] Comprehensive query - skipping IF, going deep')
+    ifDecision = { shouldRetrieve: true, reason: 'Comprehensive query detected' }
+  } else {
+    // Standard: let IF decision gate
+    ifDecision = await decideIfRetrievalNeeded(input)
+  }
 
   if (!ifDecision.shouldRetrieve) {
     console.log('[DeepRetrieval] Skipping - not needed:', ifDecision.reason)

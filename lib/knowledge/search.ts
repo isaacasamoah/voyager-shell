@@ -7,12 +7,15 @@
 // - Pinned items are always surfaced first
 
 import OpenAI from 'openai'
+import { getClientForContext } from '@/lib/supabase/authenticated'
 import { getAdminClient } from '@/lib/supabase/admin'
 import type { Classification } from './events'
 
-// Use admin client for knowledge operations (bypasses RLS)
-// TODO: Switch to user-scoped client once auth is wired up
-const getClient = () => getAdminClient()
+// Use authenticated client for user-scoped knowledge operations
+const getClientForUser = (userId: string) => getClientForContext({ userId })
+
+// Admin client for cross-user operations (legacy - functions without userId context)
+const getAdminSupabase = () => getAdminClient()
 
 // Lazy-initialize OpenAI client to avoid build-time errors
 let _openai: OpenAI | null = null
@@ -142,7 +145,7 @@ export const searchKnowledge = async (
       `[Knowledge] Search: "${query.slice(0, 50)}..." threshold: ${threshold}, limit: ${limit}`
     )
 
-    const supabase = getClient()
+    const supabase = getClientForUser(userId)
 
     // Generate embedding for the query
     const embedding = await generateEmbedding(query)
@@ -191,7 +194,7 @@ export const getKnowledgeByIds = async (eventIds: string[]): Promise<KnowledgeNo
   if (eventIds.length === 0) return []
 
   try {
-    const supabase = getClient()
+    const supabase = getAdminSupabase()
 
     
     const { data, error } = await (supabase as any)
@@ -222,7 +225,7 @@ export const getKnowledgeByIds = async (eventIds: string[]): Promise<KnowledgeNo
  */
 export const getConnectedKnowledge = async (eventId: string): Promise<KnowledgeNode[]> => {
   try {
-    const supabase = getClient()
+    const supabase = getAdminSupabase()
 
     // Get the node to find its connections
     
@@ -258,7 +261,7 @@ export const getRecentKnowledge = async (
   limit = 20
 ): Promise<KnowledgeNode[]> => {
   try {
-    const supabase = getClient()
+    const supabase = getClientForUser(userId)
 
     
     const { data, error } = await (supabase as any)
@@ -295,7 +298,7 @@ export const getPinnedKnowledge = async (
   voyageSlug?: string
 ): Promise<KnowledgeNode[]> => {
   try {
-    const supabase = getClient()
+    const supabase = getClientForUser(userId)
 
     
     let query = (supabase as any)
@@ -425,7 +428,7 @@ export const keywordGrep = async (
       `[Knowledge] Grep: "${pattern}" scope: ${scope}, case: ${caseSensitive}, limit: ${limit}`
     )
 
-    const supabase = getClient()
+    const supabase = getClientForUser(userId)
 
     // Build the query - using ILIKE for case-insensitive, LIKE for case-sensitive
     const operator = caseSensitive ? 'like' : 'ilike'
