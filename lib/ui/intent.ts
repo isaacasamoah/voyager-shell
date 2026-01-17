@@ -44,11 +44,14 @@ const INTENT_PATTERNS: IntentPattern[] = [
   // Switch voyage
   {
     patterns: [
-      /\b(switch|go|move|change|jump)\s+to\s+(?:the\s+)?(\w+)\s*(voyage|team|workspace|community)?\b/i,
-      /\b(open|show|load)\s+(?:the\s+)?(\w+)\s*(voyage|team|workspace|community)\b/i,
+      /\b(switch|go|move|change|jump|take\s+me)\s+to\s+(?:the\s+)?(.+?)\s*(voyage|team|workspace|community)?\s*$/i,
+      /\b(open|show|load)\s+(?:the\s+)?(.+?)\s*(voyage|team|workspace|community)\b/i,
     ],
     intent: 'switch_voyage',
-    extract: (match) => ({ voyageSlug: match[2]?.toLowerCase() }),
+    extract: (match) => ({
+      // Normalize: lowercase, trim, non-alphanumeric to hyphens (matching generateSlug)
+      voyageSlug: match[2]?.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+    }),
   },
   // Create voyage
   {
