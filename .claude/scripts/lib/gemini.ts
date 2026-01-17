@@ -22,6 +22,8 @@ interface TextGenerationOptions {
 
 interface ImageGenerationOptions {
   temperature?: number;
+  referenceImage?: Buffer;  // Pass an existing image as reference
+  referenceMimeType?: string;
 }
 
 interface TextResponse {
@@ -99,12 +101,27 @@ export async function generateImage(
   const model = GEMINI_MODELS.flashExp; // Image gen requires experimental model
   const url = `${getApiUrl(model)}?key=${apiKey}`;
 
+  // Build parts array - include reference image if provided
+  const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
+
+  if (options.referenceImage) {
+    parts.push({
+      inlineData: {
+        mimeType: options.referenceMimeType || "image/png",
+        data: options.referenceImage.toString("base64"),
+      }
+    });
+    parts.push({ text: prompt });
+  } else {
+    parts.push({ text: `Generate an image: ${prompt}` });
+  }
+
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{
-        parts: [{ text: `Generate an image: ${prompt}` }]
+        parts,
       }],
       generationConfig: {
         responseModalities: ["image", "text"],
@@ -119,13 +136,13 @@ export async function generateImage(
   }
 
   const data = await response.json();
-  const parts = data.candidates?.[0]?.content?.parts || [];
+  const responseParts = data.candidates?.[0]?.content?.parts || [];
 
   let image: Buffer | undefined;
   let mimeType = "image/png";
   let text: string | undefined;
 
-  for (const part of parts) {
+  for (const part of responseParts) {
     if (part.inlineData?.mimeType?.startsWith("image/")) {
       image = Buffer.from(part.inlineData.data, "base64");
       mimeType = part.inlineData.mimeType;

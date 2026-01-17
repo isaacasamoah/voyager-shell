@@ -1,4 +1,3 @@
-import { anthropic } from '@ai-sdk/anthropic';
 import { streamText, APICallError } from 'ai';
 import { waitUntil } from '@vercel/functions';
 import { composeSystemPrompt, getBasePrompt } from '@/lib/prompts';
@@ -7,12 +6,20 @@ import {
   needsTitle,
   setConversationTitle,
   loadConversationMessages,
+  type ConversationMessage,
 } from '@/lib/conversation';
+import { computeWindow, getTruncatedMessages } from '@/lib/conversation/window';
+import {
+  detectReferenceSignals,
+  retrieveForContinuity,
+} from '@/lib/conversation/continuity';
+import { detectLearningSignal, emitSignal } from '@/lib/learning/signals';
 import { callGeminiJSON } from '@/lib/gemini/client';
 import { emitMessageEvent, type KnowledgeNode } from '@/lib/knowledge';
 import { logRetrievalEvent, logCitations, createRetrievalTools } from '@/lib/retrieval';
 import { getAuthenticatedUserId } from '@/lib/auth';
 import { runDeepRetrieval } from '@/lib/agents/deep-retrieval';
+import { modelRouter, creditTracker } from '@/lib/models';
 
 export const maxDuration = 30;
 
@@ -163,6 +170,62 @@ export const POST = async (req: Request) => {
       .pop();
     const queryText = lastUserMessage?.content ?? '';
 
+    // =============================================================================
+    // CONVERSATION CONTINUITY: Sliding Window + Reference Detection
+    // =============================================================================
+
+    // Convert to ConversationMessage format for window computation
+    const conversationMessages: ConversationMessage[] = simpleMessages.map((m, i) => ({
+      id: `msg-${i}`,
+      conversationId: conversationId ?? '',
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+      createdAt: new Date(),
+    }));
+
+    // Compute token-budgeted sliding window
+    const windowResult = computeWindow(conversationMessages);
+    const truncatedMessages = getTruncatedMessages(conversationMessages, windowResult);
+
+    // Detect reference signals in user message (implicit: "that thing", temporal: "earlier")
+    const referenceSignals = queryText ? detectReferenceSignals(queryText) : [];
+
+    // Retrieve continuity context if signals detected or messages were truncated
+    let continuityContext: string | null = null;
+    if (referenceSignals.length > 0 || windowResult.hasMoreHistory) {
+      continuityContext = await retrieveForContinuity(
+        referenceSignals,
+        queryText,
+        truncatedMessages,
+        { userId, voyageSlug, conversationId: conversationId ?? '' }
+      );
+      if (continuityContext) {
+        console.log('[Chat] Continuity context retrieved:', continuityContext.slice(0, 100));
+      }
+    }
+
+    // Detect and emit learning signals (corrections, re-explanations)
+    if (queryText && conversationId) {
+      const learningSignal = detectLearningSignal(queryText);
+      if (learningSignal) {
+        console.log('[Chat] Learning signal detected:', learningSignal);
+        emitSignal({
+          type: learningSignal,
+          conversationId,
+          userId,
+          voyageSlug,
+          context: queryText.slice(0, 200),
+          timestamp: new Date(),
+        });
+      }
+    }
+
+    // Use windowed messages for the LLM context
+    const windowedSimpleMessages = windowResult.messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+
     // Save user message to DB (fire-and-forget, don't block streaming)
     if (conversationId && queryText) {
       saveMessage(conversationId, 'user', queryText).catch((error) => {
@@ -188,7 +251,7 @@ export const POST = async (req: Request) => {
       const { systemPrompt: composedPrompt, retrieval } = await composeSystemPrompt(
         userId,
         queryText,
-        { voyageSlug }
+        { voyageSlug, continuityContext }
       );
       systemPrompt = composedPrompt;
       retrievedKnowledge = retrieval.knowledge;
@@ -220,8 +283,8 @@ export const POST = async (req: Request) => {
       waitUntil,
     });
 
-    // Build conversation context for deep retrieval
-    const conversationContext = simpleMessages
+    // Build conversation context for deep retrieval (from windowed messages)
+    const conversationContext = windowedSimpleMessages
       .slice(-6)
       .map((m) => `${m.role}: ${m.content.slice(0, 200)}`);
 
@@ -242,10 +305,15 @@ export const POST = async (req: Request) => {
 
     // Primary Voyager (no retrieval tools - uses pre-fetched context)
     // Deep retrieval runs in parallel via waitUntil above
+    // Uses windowed messages to stay within token budget
     const result = streamText({
-      model: anthropic('claude-sonnet-4-20250514'),
+      model: modelRouter.select({
+        task: 'chat',
+        quality: 'balanced',
+        streaming: true,
+      }),
       system: systemPrompt,
-      messages: simpleMessages,
+      messages: windowedSimpleMessages,
       // tools: retrievalTools,  // Disabled - see proposal
       // maxSteps: 5,
       onFinish: async ({ text, finishReason, usage }) => {
@@ -255,6 +323,21 @@ export const POST = async (req: Request) => {
           finishReason,
           usage
         });
+
+        // Track credits (fire-and-forget for now, logs to console)
+        if (usage) {
+          const inputTokens = usage.inputTokens ?? 0;
+          const outputTokens = usage.outputTokens ?? 0;
+          creditTracker.track({
+            userId,
+            model: 'claude-sonnet',
+            inputTokens,
+            outputTokens,
+            cost: modelRouter.estimateCost('claude-sonnet', inputTokens, outputTokens),
+            task: 'chat',
+            conversationId,
+          });
+        }
 
         // Save assistant response after streaming completes
         if (conversationId && text) {

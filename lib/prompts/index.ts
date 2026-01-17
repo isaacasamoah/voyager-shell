@@ -59,6 +59,7 @@ export interface UserProfile {
 interface ComposeOptions {
   profile?: UserProfile;
   voyageSlug?: string;
+  continuityContext?: string | null;  // Retrieved context from conversation history
 }
 
 /**
@@ -70,7 +71,7 @@ export const composeSystemPrompt = async (
   query: string,
   options?: ComposeOptions
 ): Promise<{ systemPrompt: string; retrieval: RetrievalResult }> => {
-  const { profile, voyageSlug } = options ?? {};
+  const { profile, voyageSlug, continuityContext } = options ?? {};
 
   // Retrieve relevant context using existing retrieval system
   const retrieval = await retrieveContext(userId, query, { voyageSlug });
@@ -90,13 +91,26 @@ export const composeSystemPrompt = async (
   }
 
   // Convert retrieval to new format
+  const contextItems: KnowledgeItem[] = retrieval.knowledge.map((k) => ({
+    id: k.eventId,
+    content: k.content,
+    source: 'personal' as const,
+    relevance: k.importance || 0.5,
+  }));
+
+  // Add continuity context as high-priority item if present
+  // This is context retrieved from earlier in the conversation (beyond the window)
+  if (continuityContext) {
+    contextItems.unshift({
+      id: 'continuity-context',
+      content: continuityContext,
+      source: 'personal' as const, // Treat as personal context
+      relevance: 1.0, // High priority - user explicitly referenced this
+    });
+  }
+
   const retrievedContext: RetrievedContext = {
-    items: retrieval.knowledge.map((k) => ({
-      id: k.eventId,
-      content: k.content,
-      source: 'personal' as const,
-      relevance: k.importance || 0.5,
-    })),
+    items: contextItems,
     query,
   };
 

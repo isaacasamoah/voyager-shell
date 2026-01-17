@@ -7,6 +7,8 @@ import { Terminal, Activity, Ship, Users, Link2 } from 'lucide-react';
 import { UserMessage, AssistantMessage, AstronautState, AgentResultCard } from '@/components/chat';
 import { useAuth } from '@/lib/auth/context';
 import { createClient } from '@/lib/supabase/client';
+import { detectIntent, type UIIntent } from '@/lib/ui/intent';
+import { getSuggestions, getWelcomeSuggestion, type SuggestionContext } from '@/lib/ui/suggestions';
 
 // Voyage types
 interface VoyageMembership {
@@ -29,9 +31,8 @@ interface VoyagerInterfaceProps {
   className?: string;
 }
 
-// Command hints change based on auth state
-const AUTH_COMMANDS = ['/sign-up', '/login'];
-const USER_COMMANDS = ['/new', '/resume', '/voyages', '/create-voyage', '/invite', '/logout'];
+// Legacy command constants removed - now using natural language intent detection
+// Commands still work for backward compatibility but aren't shown in UI
 
 // API response types
 interface ConversationData {
@@ -670,104 +671,151 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     const trimmed = inputValue.trim();
     if (!trimmed) return;
 
-    // Handle /new command - start new conversation
-    if (trimmed.toLowerCase() === '/new') {
+    // Try natural language intent detection first
+    const intent = detectIntent(trimmed);
+
+    if (intent.type !== 'none') {
       setInputValue('');
-      handleNewConversation();
-      return;
+
+      switch (intent.type) {
+        case 'new_conversation':
+          handleNewConversation();
+          return;
+        case 'resume_conversation':
+          handleResume();
+          return;
+        case 'sign_up':
+          handleAuthCommand('sign-up');
+          return;
+        case 'login':
+          handleAuthCommand('login');
+          return;
+        case 'logout':
+          handleLogout();
+          return;
+        case 'show_voyages':
+          if (!isAuthenticated) {
+            setAuthMessage('Say "I want to sign up" or "I want to log in" first.');
+            setTimeout(() => setAuthMessage(null), 3000);
+            return;
+          }
+          handleVoyagesCommand();
+          return;
+        case 'switch_voyage':
+          if (!isAuthenticated) {
+            setAuthMessage('Say "I want to sign up" or "I want to log in" first.');
+            setTimeout(() => setAuthMessage(null), 3000);
+            return;
+          }
+          if (intent.voyageSlug) {
+            handleSwitchVoyage(intent.voyageSlug);
+          } else {
+            handleVoyagesCommand();
+          }
+          return;
+        case 'create_voyage':
+          if (!isAuthenticated) {
+            setAuthMessage('Say "I want to sign up" or "I want to log in" first.');
+            setTimeout(() => setAuthMessage(null), 3000);
+            return;
+          }
+          handleCreateVoyageCommand();
+          return;
+        case 'invite_member':
+          if (!isAuthenticated) {
+            setAuthMessage('Say "I want to sign up" or "I want to log in" first.');
+            setTimeout(() => setAuthMessage(null), 3000);
+            return;
+          }
+          handleInviteCommand();
+          return;
+      }
     }
 
-    // Handle /resume command - show conversation picker
-    if (trimmed.toLowerCase() === '/resume') {
-      setInputValue('');
-      handleResume();
-      return;
-    }
+    // Fall back to explicit /command handling (backward compatibility)
+    if (trimmed.startsWith('/')) {
+      const lower = trimmed.toLowerCase();
 
-    // Handle /sign-up command
-    if (trimmed.toLowerCase() === '/sign-up') {
-      setInputValue('');
-      handleAuthCommand('sign-up');
-      return;
-    }
-
-    // Handle /login command
-    if (trimmed.toLowerCase() === '/login') {
-      setInputValue('');
-      handleAuthCommand('login');
-      return;
-    }
-
-    // Handle /logout command
-    if (trimmed.toLowerCase() === '/logout') {
-      setInputValue('');
-      handleLogout();
-      return;
-    }
-
-    // Handle /voyages command - show voyage picker
-    if (trimmed.toLowerCase() === '/voyages') {
-      setInputValue('');
-      if (!isAuthenticated) {
-        setAuthMessage('Please /sign-up or /login first.');
-        setTimeout(() => setAuthMessage(null), 3000);
+      if (lower === '/new') {
+        setInputValue('');
+        handleNewConversation();
         return;
       }
-      handleVoyagesCommand();
-      return;
-    }
-
-    // Handle /switch command
-    if (trimmed.toLowerCase().startsWith('/switch')) {
-      setInputValue('');
-      if (!isAuthenticated) {
-        setAuthMessage('Please /sign-up or /login first.');
-        setTimeout(() => setAuthMessage(null), 3000);
+      if (lower === '/resume') {
+        setInputValue('');
+        handleResume();
         return;
       }
-      const slug = trimmed.slice(7).trim();
-      if (!slug) {
-        handleVoyagesCommand(); // Show picker if no slug provided
-      } else {
-        handleSwitchVoyage(slug);
-      }
-      return;
-    }
-
-    // Handle /create-voyage command
-    if (trimmed.toLowerCase().startsWith('/create-voyage')) {
-      setInputValue('');
-      if (!isAuthenticated) {
-        setAuthMessage('Please /sign-up or /login first.');
-        setTimeout(() => setAuthMessage(null), 3000);
+      if (lower === '/sign-up') {
+        setInputValue('');
+        handleAuthCommand('sign-up');
         return;
       }
-      const voyageName = trimmed.slice(14).trim(); // "/create-voyage" = 14 chars
-      if (voyageName) {
-        // Create directly with provided name
-        handleCreateVoyageSubmit(voyageName);
-      } else {
-        // Show form for name input
-        handleCreateVoyageCommand();
-      }
-      return;
-    }
-
-    // Handle /invite command
-    if (trimmed.toLowerCase() === '/invite') {
-      setInputValue('');
-      if (!isAuthenticated) {
-        setAuthMessage('Please /sign-up or /login first.');
-        setTimeout(() => setAuthMessage(null), 3000);
+      if (lower === '/login') {
+        setInputValue('');
+        handleAuthCommand('login');
         return;
       }
-      handleInviteCommand();
-      return;
+      if (lower === '/logout') {
+        setInputValue('');
+        handleLogout();
+        return;
+      }
+      if (lower === '/voyages') {
+        setInputValue('');
+        if (!isAuthenticated) {
+          setAuthMessage('Say "I want to sign up" or "I want to log in" first.');
+          setTimeout(() => setAuthMessage(null), 3000);
+          return;
+        }
+        handleVoyagesCommand();
+        return;
+      }
+      if (lower.startsWith('/switch')) {
+        setInputValue('');
+        if (!isAuthenticated) {
+          setAuthMessage('Say "I want to sign up" or "I want to log in" first.');
+          setTimeout(() => setAuthMessage(null), 3000);
+          return;
+        }
+        const slug = trimmed.slice(7).trim();
+        if (!slug) {
+          handleVoyagesCommand();
+        } else {
+          handleSwitchVoyage(slug);
+        }
+        return;
+      }
+      if (lower.startsWith('/create-voyage')) {
+        setInputValue('');
+        if (!isAuthenticated) {
+          setAuthMessage('Say "I want to sign up" or "I want to log in" first.');
+          setTimeout(() => setAuthMessage(null), 3000);
+          return;
+        }
+        const voyageName = trimmed.slice(14).trim();
+        if (voyageName) {
+          handleCreateVoyageSubmit(voyageName);
+        } else {
+          handleCreateVoyageCommand();
+        }
+        return;
+      }
+      if (lower === '/invite') {
+        setInputValue('');
+        if (!isAuthenticated) {
+          setAuthMessage('Say "I want to sign up" or "I want to log in" first.');
+          setTimeout(() => setAuthMessage(null), 3000);
+          return;
+        }
+        handleInviteCommand();
+        return;
+      }
     }
 
-    // For authenticated commands, require login
+    // Regular chat message - require authentication
     if (!isAuthenticated) {
-      setAuthMessage('Please /sign-up or /login first.');
+      setAuthMessage('Say "I want to sign up" or "I want to log in" to get started.');
       setTimeout(() => setAuthMessage(null), 3000);
       setInputValue('');
       return;
@@ -799,8 +847,10 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     // Shift+Enter allows newline (default textarea behavior)
   };
 
-  const handleCommandClick = (command: string) => {
-    setInputValue(command);
+  const handleSuggestionClick = (action: string) => {
+    setInputValue(action);
+    // Focus input after setting suggestion
+    inputRef.current?.focus();
   };
 
   // Helper to extract text content from UIMessage
@@ -814,6 +864,20 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     }
     return '';
   };
+
+  // Compute context-aware suggestions
+  const suggestionContext: SuggestionContext = useMemo(() => ({
+    isAuthenticated,
+    hasVoyages: voyages.length > 0,
+    currentVoyage: currentVoyage?.slug,
+    hasRecentConversations: resumableConversations.length > 0,
+    lastMessageRole: messages.length > 0 ? messages[messages.length - 1]?.role : undefined,
+    conversationLength: messages.length,
+    isLoading,
+  }), [isAuthenticated, voyages.length, currentVoyage?.slug, resumableConversations.length, messages, isLoading]);
+
+  const suggestions = useMemo(() => getSuggestions(suggestionContext), [suggestionContext]);
+  const welcomeHint = useMemo(() => getWelcomeSuggestion(suggestionContext), [suggestionContext]);
 
   return (
     <div className={`min-h-screen bg-[#050505] text-slate-300 font-mono text-sm selection:bg-indigo-500/30 overflow-x-hidden relative ${className || ''}`}>
@@ -1318,19 +1382,28 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
       {/* INPUT DECK */}
       <div className="fixed bottom-0 left-0 right-0 bg-[#050505]/95 backdrop-blur border-t border-white/10 p-4 pb-6">
         <div className="max-w-2xl mx-auto">
-          {/* Command Hints - auth-aware */}
-          <div className="flex gap-2 mb-3 overflow-x-auto pb-1 scrollbar-hide snap-x snap-mandatory">
-            {(isAuthenticated ? USER_COMMANDS : AUTH_COMMANDS).map(cmd => (
-              <button
-                key={cmd}
-                type="button"
-                onClick={() => handleCommandClick(cmd)}
-                className="px-3 py-1 bg-white/5 border border-white/5 rounded text-xs text-slate-400 hover:border-indigo-500/50 hover:text-indigo-300 hover:bg-white/10 transition whitespace-nowrap font-mono snap-start shrink-0 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-              >
-                {cmd}
-              </button>
-            ))}
-          </div>
+          {/* Context-Aware Suggestions - replaces static command hints */}
+          {suggestions.length > 0 && (
+            <div className="flex gap-3 mb-3 overflow-x-auto pb-1 scrollbar-hide">
+              {suggestions.map(suggestion => (
+                <button
+                  key={suggestion.id}
+                  type="button"
+                  onClick={() => handleSuggestionClick(suggestion.action)}
+                  className="text-xs text-slate-500 hover:text-slate-300 transition-colors whitespace-nowrap"
+                >
+                  {suggestion.text}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Welcome hint for empty states */}
+          {welcomeHint && messages.length === 0 && (
+            <div className="text-xs text-slate-600 mb-3 italic">
+              {welcomeHint}
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="flex items-start gap-3 group">
             <span className={`font-bold mt-1 ${isLoading ? 'text-amber-500' : 'text-green-500 animate-pulse'}`}>&#10132;</span>
@@ -1339,7 +1412,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
               <textarea
                 ref={inputRef}
                 className="w-full bg-transparent border-none outline-none text-slate-200 placeholder-slate-700 font-mono text-sm resize-none min-h-[24px] max-h-32 overflow-y-auto"
-                placeholder={isLoading ? "Type to queue message..." : "Type a message..."}
+                placeholder={isLoading ? "Type to queue message..." : "Just talk to me..."}
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyDown}
