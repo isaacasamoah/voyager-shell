@@ -1,6 +1,8 @@
 // Natural language intent detection
 // Detect what user wants without explicit /commands
 
+import { log } from '@/lib/debug';
+
 export type UIIntent =
   | { type: 'new_conversation' }
   | { type: 'resume_conversation'; conversationId?: string }
@@ -115,6 +117,7 @@ export const detectIntent = (message: string): UIIntent => {
 
   // Skip very long messages - they're likely actual content, not commands
   if (trimmed.length > 100) {
+    log.intent('Skipped - message too long', { length: trimmed.length })
     return { type: 'none' }
   }
 
@@ -123,10 +126,9 @@ export const detectIntent = (message: string): UIIntent => {
       const match = trimmed.match(pattern)
       if (match) {
         const base = { type: intent } as UIIntent
-        if (extract) {
-          return { ...base, ...extract(match, trimmed) } as UIIntent
-        }
-        return base
+        const result = extract ? { ...base, ...extract(match, trimmed) } as UIIntent : base
+        log.intent('Matched pattern', { type: intent, input: trimmed.slice(0, 50), pattern: pattern.source.slice(0, 40) })
+        return result
       }
     }
   }

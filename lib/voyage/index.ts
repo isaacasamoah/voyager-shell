@@ -2,6 +2,7 @@
 // Manages voyages (communities), membership, and configuration
 
 import { getAdminClient } from '@/lib/supabase/admin';
+import { log } from '@/lib/debug';
 import type { VoyageConfig } from '@/lib/prompts/types';
 import type {
   Voyage,
@@ -70,11 +71,11 @@ export const createVoyage = async (
   userId: string
 ): Promise<Voyage | null> => {
   const supabase = getAdminSupabase();
-  console.log('[Voyage] Creating voyage:', input.name, 'by user:', userId);
+  log.voyage('Creating voyage', { name: input.name, userId });
 
   try {
     // Use the database function that creates voyage + adds captain
-    
+
     const { data: voyageId, error: createError } = await (supabase as any).rpc(
       'create_voyage_with_captain',
       {
@@ -86,19 +87,19 @@ export const createVoyage = async (
     );
 
     if (createError) {
-      console.error('[Voyage] Create error:', createError);
+      log.voyage('Create voyage error', { error: createError.message }, 'error');
       return null;
     }
 
     if (!voyageId) {
-      console.error('[Voyage] No voyage ID returned');
+      log.voyage('No voyage ID returned', undefined, 'error');
       return null;
     }
 
     // Fetch the created voyage
     return getVoyageById(voyageId);
   } catch (error) {
-    console.error('[Voyage] createVoyage error:', error);
+    log.voyage('createVoyage error', { error: String(error) }, 'error');
     return null;
   }
 };
@@ -110,7 +111,7 @@ export const getVoyageById = async (voyageId: string): Promise<Voyage | null> =>
   const supabase = getAdminSupabase();
 
   try {
-    
+
     const { data, error } = await (supabase as any)
       .from('voyages')
       .select('*')
@@ -118,13 +119,13 @@ export const getVoyageById = async (voyageId: string): Promise<Voyage | null> =>
       .single();
 
     if (error) {
-      console.error('[Voyage] getVoyageById error:', error);
+      log.voyage('getVoyageById error', { error: error.message, voyageId }, 'error');
       return null;
     }
 
     return transformVoyage(data as VoyageRow);
   } catch (error) {
-    console.error('[Voyage] getVoyageById error:', error);
+    log.voyage('getVoyageById error', { error: String(error), voyageId }, 'error');
     return null;
   }
 };
@@ -134,10 +135,10 @@ export const getVoyageById = async (voyageId: string): Promise<Voyage | null> =>
  */
 export const getVoyageBySlug = async (slug: string): Promise<Voyage | null> => {
   const supabase = getAdminSupabase();
-  console.log('[Voyage] Getting voyage by slug:', slug);
+  log.voyage('Getting voyage by slug', { slug });
 
   try {
-    
+
     const { data, error } = await (supabase as any)
       .from('voyages')
       .select('*')
@@ -149,13 +150,13 @@ export const getVoyageBySlug = async (slug: string): Promise<Voyage | null> => {
         // No rows returned
         return null;
       }
-      console.error('[Voyage] getVoyageBySlug error:', error);
+      log.voyage('getVoyageBySlug error', { error: error.message, slug }, 'error');
       return null;
     }
 
     return transformVoyage(data as VoyageRow);
   } catch (error) {
-    console.error('[Voyage] getVoyageBySlug error:', error);
+    log.voyage('getVoyageBySlug error', { error: String(error), slug }, 'error');
     return null;
   }
 };
@@ -168,7 +169,7 @@ export const updateVoyage = async (
   input: UpdateVoyageInput
 ): Promise<Voyage | null> => {
   const supabase = getAdminSupabase();
-  console.log('[Voyage] Updating voyage:', voyageId);
+  log.voyage('Updating voyage', { voyageId });
 
   try {
     const updates: Record<string, unknown> = {
@@ -184,7 +185,7 @@ export const updateVoyage = async (
       updates.settings = { ...current?.config, ...input.config };
     }
 
-    
+
     const { data, error } = await (supabase as any)
       .from('voyages')
       .update(updates)
@@ -193,13 +194,13 @@ export const updateVoyage = async (
       .single();
 
     if (error) {
-      console.error('[Voyage] updateVoyage error:', error);
+      log.voyage('updateVoyage error', { error: error.message, voyageId }, 'error');
       return null;
     }
 
     return transformVoyage(data as VoyageRow);
   } catch (error) {
-    console.error('[Voyage] updateVoyage error:', error);
+    log.voyage('updateVoyage error', { error: String(error), voyageId }, 'error');
     return null;
   }
 };
@@ -213,16 +214,16 @@ export const updateVoyage = async (
  */
 export const getUserVoyages = async (userId: string): Promise<VoyageMembership[]> => {
   const supabase = getAdminSupabase();
-  console.log('[Voyage] Getting voyages for user:', userId);
+  log.voyage('Getting voyages for user', { userId });
 
   try {
-    
+
     const { data, error } = await (supabase as any).rpc('get_user_voyages', {
       p_user_id: userId,
     });
 
     if (error) {
-      console.error('[Voyage] getUserVoyages error:', error);
+      log.voyage('getUserVoyages error', { error: error.message, userId }, 'error');
       return [];
     }
 
@@ -232,7 +233,7 @@ export const getUserVoyages = async (userId: string): Promise<VoyageMembership[]
 
     return (data as UserVoyageRow[]).map(transformMembership);
   } catch (error) {
-    console.error('[Voyage] getUserVoyages error:', error);
+    log.voyage('getUserVoyages error', { error: String(error), userId }, 'error');
     return [];
   }
 };
@@ -247,20 +248,20 @@ export const getUserRole = async (
   const supabase = getAdminSupabase();
 
   try {
-    
+
     const { data, error } = await (supabase as any).rpc('get_voyage_role', {
       p_voyage_slug: voyageSlug,
       p_user_id: userId,
     });
 
     if (error) {
-      console.error('[Voyage] getUserRole error:', error);
+      log.voyage('getUserRole error', { error: error.message, voyageSlug, userId }, 'error');
       return null;
     }
 
     return data as VoyageRole | null;
   } catch (error) {
-    console.error('[Voyage] getUserRole error:', error);
+    log.voyage('getUserRole error', { error: String(error), voyageSlug, userId }, 'error');
     return null;
   }
 };
@@ -272,20 +273,20 @@ export const isCaptain = async (voyageSlug: string, userId: string): Promise<boo
   const supabase = getAdminSupabase();
 
   try {
-    
+
     const { data, error } = await (supabase as any).rpc('is_voyage_captain', {
       p_voyage_slug: voyageSlug,
       p_user_id: userId,
     });
 
     if (error) {
-      console.error('[Voyage] isCaptain error:', error);
+      log.voyage('isCaptain error', { error: error.message, voyageSlug, userId }, 'error');
       return false;
     }
 
     return data === true;
   } catch (error) {
-    console.error('[Voyage] isCaptain error:', error);
+    log.voyage('isCaptain error', { error: String(error), voyageSlug, userId }, 'error');
     return false;
   }
 };
@@ -299,10 +300,10 @@ export const isCaptain = async (voyageSlug: string, userId: string): Promise<boo
  */
 export const getVoyageMembers = async (voyageId: string): Promise<VoyageMember[]> => {
   const supabase = getAdminSupabase();
-  console.log('[Voyage] Getting members for voyage:', voyageId);
+  log.voyage('Getting members for voyage', { voyageId });
 
   try {
-    
+
     const { data, error } = await (supabase as any)
       .from('voyage_members')
       .select(`
@@ -316,14 +317,14 @@ export const getVoyageMembers = async (voyageId: string): Promise<VoyageMember[]
       .order('joined_at', { ascending: true });
 
     if (error) {
-      console.error('[Voyage] getVoyageMembers error:', error);
+      log.voyage('getVoyageMembers error', { error: error.message, voyageId }, 'error');
       return [];
     }
 
     return (data as (VoyageMemberRow & { profiles: { email: string; display_name: string } })[])
       .map(transformMember);
   } catch (error) {
-    console.error('[Voyage] getVoyageMembers error:', error);
+    log.voyage('getVoyageMembers error', { error: String(error), voyageId }, 'error');
     return [];
   }
 };
@@ -337,10 +338,10 @@ export const updateMemberRole = async (
   newRole: VoyageRole
 ): Promise<boolean> => {
   const supabase = getAdminSupabase();
-  console.log('[Voyage] Updating member role:', userId, 'to', newRole);
+  log.voyage('Updating member role', { voyageId, userId, newRole });
 
   try {
-    
+
     const { error } = await (supabase as any)
       .from('voyage_members')
       .update({ role: newRole })
@@ -348,13 +349,13 @@ export const updateMemberRole = async (
       .eq('user_id', userId);
 
     if (error) {
-      console.error('[Voyage] updateMemberRole error:', error);
+      log.voyage('updateMemberRole error', { error: error.message, voyageId, userId }, 'error');
       return false;
     }
 
     return true;
   } catch (error) {
-    console.error('[Voyage] updateMemberRole error:', error);
+    log.voyage('updateMemberRole error', { error: String(error), voyageId, userId }, 'error');
     return false;
   }
 };
@@ -371,30 +372,30 @@ export const joinVoyageByCode = async (
   userId: string
 ): Promise<Voyage | null> => {
   const supabase = getAdminSupabase();
-  console.log('[Voyage] Joining voyage with code:', inviteCode);
+  log.voyage('Joining voyage with code', { inviteCode });
 
   try {
     // Use the database function
-    
+
     const { data: voyageId, error } = await (supabase as any).rpc('join_voyage_by_code', {
       p_invite_code: inviteCode,
       p_user_id: userId,
     });
 
     if (error) {
-      console.error('[Voyage] joinVoyageByCode error:', error);
+      log.voyage('joinVoyageByCode error', { error: error.message, inviteCode }, 'error');
       return null;
     }
 
     if (!voyageId) {
-      console.log('[Voyage] Invalid invite code');
+      log.voyage('Invalid invite code', { inviteCode });
       return null;
     }
 
     // Fetch the voyage
     return getVoyageById(voyageId);
   } catch (error) {
-    console.error('[Voyage] joinVoyageByCode error:', error);
+    log.voyage('joinVoyageByCode error', { error: String(error), inviteCode }, 'error');
     return null;
   }
 };
@@ -404,10 +405,10 @@ export const joinVoyageByCode = async (
  */
 export const getVoyageByInviteCode = async (inviteCode: string): Promise<Voyage | null> => {
   const supabase = getAdminSupabase();
-  console.log('[Voyage] Looking up voyage by invite code:', inviteCode);
+  log.voyage('Looking up voyage by invite code', { inviteCode });
 
   try {
-    
+
     const { data, error } = await (supabase as any)
       .from('voyages')
       .select('*')
@@ -418,13 +419,13 @@ export const getVoyageByInviteCode = async (inviteCode: string): Promise<Voyage 
       if (error.code === 'PGRST116') {
         return null;
       }
-      console.error('[Voyage] getVoyageByInviteCode error:', error);
+      log.voyage('getVoyageByInviteCode error', { error: error.message, inviteCode }, 'error');
       return null;
     }
 
     return transformVoyage(data as VoyageRow);
   } catch (error) {
-    console.error('[Voyage] getVoyageByInviteCode error:', error);
+    log.voyage('getVoyageByInviteCode error', { error: String(error), inviteCode }, 'error');
     return null;
   }
 };
@@ -437,23 +438,23 @@ export const regenerateInviteCode = async (
   userId: string
 ): Promise<string | null> => {
   const supabase = getAdminSupabase();
-  console.log('[Voyage] Regenerating invite code for voyage:', voyageId);
+  log.voyage('Regenerating invite code', { voyageId });
 
   try {
-    
+
     const { data, error } = await (supabase as any).rpc('regenerate_voyage_invite', {
       p_voyage_id: voyageId,
       p_user_id: userId,
     });
 
     if (error) {
-      console.error('[Voyage] regenerateInviteCode error:', error);
+      log.voyage('regenerateInviteCode error', { error: error.message, voyageId }, 'error');
       return null;
     }
 
     return data as string | null;
   } catch (error) {
-    console.error('[Voyage] regenerateInviteCode error:', error);
+    log.voyage('regenerateInviteCode error', { error: String(error), voyageId }, 'error');
     return null;
   }
 };

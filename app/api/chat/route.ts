@@ -20,6 +20,7 @@ import { logRetrievalEvent, logCitations, createRetrievalTools } from '@/lib/ret
 import { getAuthenticatedUserId } from '@/lib/auth';
 import { runDeepRetrieval } from '@/lib/agents/deep-retrieval';
 import { modelRouter, creditTracker } from '@/lib/models';
+import { log } from '@/lib/debug';
 
 export const maxDuration = 30;
 
@@ -128,6 +129,8 @@ const convertToSimpleMessages = (messages: UIMessage[]): SimpleMessage[] => {
 };
 
 export const POST = async (req: Request) => {
+  log.api('Chat request received');
+
   // Check for API key
   if (!process.env.ANTHROPIC_API_KEY) {
     return new Response(
@@ -170,6 +173,13 @@ export const POST = async (req: Request) => {
       .pop();
     const queryText = lastUserMessage?.content ?? '';
 
+    log.message('Processing user message', {
+      conversationId,
+      voyageSlug,
+      messageCount: simpleMessages.length,
+      queryLength: queryText.length,
+    });
+
     // =============================================================================
     // CONVERSATION CONTINUITY: Sliding Window + Reference Detection
     // =============================================================================
@@ -200,7 +210,7 @@ export const POST = async (req: Request) => {
         { userId, voyageSlug, conversationId: conversationId ?? '' }
       );
       if (continuityContext) {
-        console.log('[Chat] Continuity context retrieved:', continuityContext.slice(0, 100));
+        log.memory('Continuity context retrieved', { length: continuityContext.length, preview: continuityContext.slice(0, 80) });
       }
     }
 
@@ -208,7 +218,7 @@ export const POST = async (req: Request) => {
     if (queryText && conversationId) {
       const learningSignal = detectLearningSignal(queryText);
       if (learningSignal) {
-        console.log('[Chat] Learning signal detected:', learningSignal);
+        log.memory('Learning signal detected', { signal: learningSignal });
         emitSignal({
           type: learningSignal,
           conversationId,
@@ -271,7 +281,7 @@ export const POST = async (req: Request) => {
         retrievalEventId = id;
       });
     } catch (error) {
-      console.warn('[Chat] Prompt composition failed, using base prompt:', error);
+      log.api('Prompt composition failed, using base prompt', { error: String(error) }, 'warn');
       systemPrompt = getBasePrompt();
     }
 
@@ -291,6 +301,7 @@ export const POST = async (req: Request) => {
     // Spawn deep retrieval in parallel (non-blocking)
     // This implements "initial results THEN more detail when ready"
     if (conversationId && queryText) {
+      log.agent('Spawning deep retrieval', { conversationId, queryLength: queryText.length });
       waitUntil(
         runDeepRetrieval({
           query: queryText,
@@ -317,11 +328,11 @@ export const POST = async (req: Request) => {
       // tools: retrievalTools,  // Disabled - see proposal
       // maxSteps: 5,
       onFinish: async ({ text, finishReason, usage }) => {
-        console.log('[Chat] onFinish:', {
-          hasText: !!text,
+        log.message('Stream complete', {
           textLength: text?.length ?? 0,
           finishReason,
-          usage
+          inputTokens: usage?.inputTokens,
+          outputTokens: usage?.outputTokens,
         });
 
         // Track credits (fire-and-forget for now, logs to console)
@@ -423,7 +434,7 @@ export const POST = async (req: Request) => {
     }
 
     // Generic error fallback
-    console.error('Chat API error:', error);
+    log.api('Chat API error', { error: String(error) }, 'error');
     return new Response(
       JSON.stringify({
         error: 'Internal error',

@@ -8,7 +8,15 @@ import { UserMessage, AssistantMessage, AstronautState, AgentResultCard } from '
 import { useAuth } from '@/lib/auth/context';
 import { createClient } from '@/lib/supabase/client';
 import { detectIntent, type UIIntent } from '@/lib/ui/intent';
+import { log } from '@/lib/debug';
 import { getSuggestions, getWelcomeSuggestion, type SuggestionContext } from '@/lib/ui/suggestions';
+import {
+  createUIMessage,
+  createComponent,
+  resolveComponent,
+  type UIComponentMessage,
+  type MessagePart,
+} from '@/lib/ui/components';
 
 // Voyage types
 interface VoyageMembership {
@@ -33,6 +41,9 @@ interface VoyagerInterfaceProps {
 
 // Legacy command constants removed - now using natural language intent detection
 // Commands still work for backward compatibility but aren't shown in UI
+
+// Personal voyage synonyms for context switching
+const PERSONAL_SYNONYMS = ['personal', 'solo', 'default', 'home', 'my', 'mine', ''];
 
 // API response types
 interface ConversationData {
@@ -135,6 +146,9 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   // Background agent results (Phase 2: Claude as Query Compiler)
   const [agentResults, setAgentResults] = useState<AgentResult[]>([]);
 
+  // UI component messages (ephemeral, in-stream)
+  const [uiMessages, setUiMessages] = useState<UIComponentMessage[]>([]);
+
   // Refs to track current state for the transport
   const conversationIdRef = useRef<string | null>(null);
   conversationIdRef.current = conversationId;
@@ -185,7 +199,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
           setMessages([]);
         }
 
-        console.log('[Voyager] Loaded conversation:', data.conversation.id, 'voyage:', voyageSlug ?? 'personal');
+        log.voyage('Loaded conversation', { conversationId: data.conversation.id, voyageSlug: voyageSlug ?? 'personal' });
       } catch (error) {
         console.error('[Voyager] Failed to fetch conversation:', error);
       } finally {
@@ -255,7 +269,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
           }
         }
       } catch (error) {
-        console.error('[Voyager] Failed to fetch voyages:', error);
+        log.voyage('Failed to fetch voyages', { error: String(error) }, 'error');
       }
     };
 
@@ -377,9 +391,9 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
 
       setFeedbackMessage('New conversation started.');
       setTimeout(() => setFeedbackMessage(null), 2000);
-      console.log('[Voyager] Created new conversation:', data.conversation.id);
+      log.message('Created new conversation', { conversationId: data.conversation.id });
     } catch (error) {
-      console.error('[Voyager] Failed to create new conversation:', error);
+      log.message('Failed to create new conversation', { error: String(error) }, 'error');
       setFeedbackMessage('Failed to start new conversation.');
       setTimeout(() => setFeedbackMessage(null), 3000);
     }
@@ -401,7 +415,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
       const data: ResumableResponse = await res.json();
       setResumableConversations(data.conversations);
     } catch (error) {
-      console.error('[Voyager] Failed to fetch resumable conversations:', error);
+      log.message('Failed to fetch resumable conversations', { error: String(error) }, 'error');
       setFeedbackMessage('Failed to load conversations.');
       setTimeout(() => setFeedbackMessage(null), 3000);
       setShowResumePicker(false);
@@ -434,9 +448,9 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
       }
 
       setShowResumePicker(false);
-      console.log('[Voyager] Resumed conversation:', data.conversation.id);
+      log.message('Resumed conversation', { conversationId: data.conversation.id });
     } catch (error) {
-      console.error('[Voyager] Failed to resume conversation:', error);
+      log.message('Failed to resume conversation', { error: String(error) }, 'error');
       setFeedbackMessage('Failed to resume conversation.');
       setTimeout(() => setFeedbackMessage(null), 3000);
     }
@@ -500,49 +514,111 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     setAuthMessage(null);
   }, []);
 
-  // Handle /voyages command - show voyage picker
+  // Handle /voyages command - inject voyage picker into message stream
   const handleVoyagesCommand = useCallback(async () => {
-    setIsLoadingVoyages(true);
-    setShowVoyagePicker(true);
+    log.ui('Injecting voyage picker');
+    // Inject a loading message
+    const loadingMsg = createUIMessage('Loading your voyages...');
+    setUiMessages(prev => [...prev, loadingMsg]);
 
     try {
       const res = await fetch('/api/voyages');
       if (!res.ok) throw new Error('Failed to fetch voyages');
 
       const data = await res.json();
-      setVoyages(data.voyages || []);
+      const fetchedVoyages = data.voyages || [];
+      setVoyages(fetchedVoyages);
+
+      // Replace loading message with the actual picker
+      const pickerComponent = createComponent('voyage_picker', {
+        voyages: [
+          { slug: 'personal', name: 'Personal', role: 'private' },
+          ...fetchedVoyages.map((v: VoyageMembership) => ({
+            slug: v.slug,
+            name: v.name,
+            role: v.role,
+          })),
+        ],
+      });
+
+      const pickerMsg = createUIMessage(
+        'Here are your voyages:',
+        [pickerComponent],
+        true // ephemeral
+      );
+
+      // Replace the loading message with the picker
+      setUiMessages(prev => prev.map(m => m.id === loadingMsg.id ? pickerMsg : m));
     } catch (error) {
-      console.error('[Voyager] Failed to fetch voyages:', error);
+      log.voyage('Failed to fetch voyages for picker', { error: String(error) }, 'error');
+      // Replace loading message with error
+      setUiMessages(prev => prev.filter(m => m.id !== loadingMsg.id));
       setFeedbackMessage('Failed to load voyages.');
       setTimeout(() => setFeedbackMessage(null), 3000);
-      setShowVoyagePicker(false);
-    } finally {
-      setIsLoadingVoyages(false);
     }
   }, []);
 
   // Handle /switch command - switch to a specific voyage
-  const PERSONAL_SYNONYMS = ['personal', 'solo', 'default', 'home', 'my', 'mine', ''];
-  const handleSwitchVoyage = useCallback((slug: string) => {
+  const handleSwitchVoyage = useCallback((slug: string, fromPicker = false) => {
     if (PERSONAL_SYNONYMS.includes(slug)) {
+      log.voyage('Switched', { from: currentVoyage?.slug ?? 'personal', to: 'personal' });
       setCurrentVoyage(null);
-      setShowVoyagePicker(false);
+      if (!fromPicker) setShowVoyagePicker(false); // Legacy modal support
       setFeedbackMessage('Switched to Personal context.');
       setTimeout(() => setFeedbackMessage(null), 2000);
-      return;
+      return { success: true, name: 'Personal' };
     }
 
     const voyage = voyages.find(v => v.slug === slug);
     if (voyage) {
+      log.voyage('Switched', { from: currentVoyage?.slug ?? 'personal', to: voyage.slug });
       setCurrentVoyage(voyage);
-      setShowVoyagePicker(false);
+      if (!fromPicker) setShowVoyagePicker(false); // Legacy modal support
       setFeedbackMessage(`Switched to ${voyage.name}.`);
       setTimeout(() => setFeedbackMessage(null), 2000);
+      return { success: true, name: voyage.name };
     } else {
+      log.voyage('Switch failed - not found', { slug });
       setFeedbackMessage(`Voyage "${slug}" not found.`);
       setTimeout(() => setFeedbackMessage(null), 3000);
+      return { success: false, name: null };
     }
-  }, [voyages]);
+  }, [voyages, currentVoyage]);
+
+  // Handle voyage selection from inline picker component
+  const handleVoyagePickerSelect = useCallback((slug: string) => {
+    const result = handleSwitchVoyage(slug, true);
+
+    // Resolve all voyage_picker components in UI messages
+    setUiMessages(prev => prev.map(msg => {
+      const hasVoyagePicker = msg.parts.some(
+        p => p.type === 'component' && p.component.type === 'voyage_picker'
+      );
+      if (!hasVoyagePicker) return msg;
+
+      // Find and resolve the picker component
+      return {
+        ...msg,
+        parts: msg.parts.map(part => {
+          if (part.type === 'component' && part.component.type === 'voyage_picker') {
+            return {
+              ...part,
+              component: {
+                ...part.component,
+                state: 'resolved' as const,
+                resolution: {
+                  action: 'selected',
+                  value: slug,
+                  label: result.name || slug,
+                },
+              },
+            };
+          }
+          return part;
+        }),
+      };
+    }));
+  }, [handleSwitchVoyage]);
 
   // Handle /create-voyage command
   const handleCreateVoyageCommand = useCallback(() => {
@@ -600,7 +676,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
       setFeedbackMessage(`Created ${data.voyage.name}! Share the invite link to add members.`);
       setTimeout(() => setFeedbackMessage(null), 5000);
     } catch (error) {
-      console.error('[Voyager] Failed to create voyage:', error);
+      log.voyage('Failed to create voyage', { error: String(error) }, 'error');
       setFeedbackMessage('Failed to create voyage.');
       setTimeout(() => setFeedbackMessage(null), 3000);
     } finally {
@@ -637,7 +713,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
         setTimeout(() => setFeedbackMessage(null), 3000);
       }
     } catch (error) {
-      console.error('[Voyager] Failed to get invite:', error);
+      log.voyage('Failed to get invite', { error: String(error) }, 'error');
       setFeedbackMessage('Failed to get invite link.');
       setTimeout(() => setFeedbackMessage(null), 3000);
     }
@@ -676,6 +752,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     const intent = detectIntent(trimmed);
 
     if (intent.type !== 'none') {
+      log.intent('Detected', { type: intent.type, input: trimmed.slice(0, 50) });
       setInputValue('');
 
       switch (intent.type) {
@@ -823,7 +900,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     }
 
     if (!conversationId) {
-      console.error('[Voyager] Cannot send - no conversation loaded');
+      log.message('Cannot send - no conversation loaded', undefined, 'error');
       return;
     }
 
@@ -879,6 +956,34 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
 
   const suggestions = useMemo(() => getSuggestions(suggestionContext), [suggestionContext]);
   const welcomeHint = useMemo(() => getWelcomeSuggestion(suggestionContext), [suggestionContext]);
+
+  // Merge chat messages with UI component messages for unified stream
+  type MergedMessage =
+    | { source: 'chat'; message: UIMessage }
+    | { source: 'ui'; message: UIComponentMessage };
+
+  const mergedMessages = useMemo((): MergedMessage[] => {
+    const chatMsgs: MergedMessage[] = messages.map(m => ({
+      source: 'chat' as const,
+      message: m,
+    }));
+    const uiMsgs: MergedMessage[] = uiMessages.map(m => ({
+      source: 'ui' as const,
+      message: m,
+    }));
+
+    // UI messages append at the end (they're responses to user actions)
+    // Chat messages maintain their original order from useChat
+    return [...chatMsgs, ...uiMsgs];
+  }, [messages, uiMessages]);
+
+  // Handler for component actions in the stream
+  const handleComponentAction = useCallback((action: string, data?: unknown) => {
+    if (action === 'voyage_select' && typeof data === 'string') {
+      handleVoyagePickerSelect(data);
+    }
+    // Add more action handlers as needed
+  }, [handleVoyagePickerSelect]);
 
   return (
     <div className={`min-h-screen bg-[#050505] text-slate-300 font-mono text-sm selection:bg-indigo-500/30 overflow-x-hidden relative ${className || ''}`}>
@@ -998,14 +1103,47 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
           </div>
         )}
 
-        {/* Messages */}
-        {messages.map((message: UIMessage, index: number) => {
+        {/* Messages - unified stream of chat + UI messages */}
+        {mergedMessages.map((item, index) => {
           const timestamp = new Date().toLocaleTimeString('en-US', {
             hour: '2-digit',
             minute: '2-digit',
             hour12: false
           });
 
+          // UI Component Message
+          if (item.source === 'ui') {
+            const uiMsg = item.message;
+            // Convert UIComponentMessage parts to AssistantMessage parts format
+            const parts = uiMsg.parts.map(part => {
+              if (part.type === 'text') {
+                return { type: 'text' as const, text: part.text };
+              }
+              // Pass component with onSelect wired up
+              const componentWithHandler = {
+                ...part.component,
+                props: {
+                  ...part.component.props,
+                  onSelect: part.component.type === 'voyage_picker'
+                    ? (slug: string) => handleComponentAction('voyage_select', slug)
+                    : undefined,
+                },
+              };
+              return { type: 'component' as const, component: componentWithHandler };
+            });
+
+            return (
+              <AssistantMessage
+                key={uiMsg.id}
+                parts={parts}
+                timestamp={timestamp}
+                onAction={handleComponentAction}
+              />
+            );
+          }
+
+          // Regular Chat Message
+          const message = item.message;
           const content = getMessageText(message);
 
           if (message.role === 'user') {
@@ -1020,7 +1158,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
           }
 
           if (message.role === 'assistant') {
-            const isCurrentlyStreaming = isStreaming && index === messages.length - 1;
+            const isCurrentlyStreaming = isStreaming && index === mergedMessages.length - 1 && item.source === 'chat';
             return (
               <AssistantMessage
                 key={message.id}
@@ -1197,89 +1335,11 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
           </div>
         )}
 
-        {/* Voyage Picker */}
+        {/* Voyage Picker - LEGACY MODAL (disabled - now using in-stream component)
         {showVoyagePicker && (
-          <div className="flex gap-4">
-            <div className="w-12 pt-1 text-right text-purple-500/50 text-[10px] font-bold tracking-widest">
-              <Ship size={12} className="inline" />
-            </div>
-            <div className="flex-1">
-              <div className="border border-purple-500/30 bg-purple-500/5 rounded-sm overflow-hidden">
-                <div className="px-3 py-2 border-b border-purple-500/20 flex items-center justify-between">
-                  <span className="text-purple-300 text-xs font-bold">Your Voyages</span>
-                  <button
-                    type="button"
-                    onClick={() => setShowVoyagePicker(false)}
-                    className="text-slate-500 hover:text-slate-300 text-xs"
-                  >
-                    [ESC]
-                  </button>
-                </div>
-                {isLoadingVoyages ? (
-                  <div className="px-3 py-4 text-slate-500 text-xs">Loading voyages...</div>
-                ) : (
-                  <div className="divide-y divide-purple-500/10 max-h-64 overflow-y-auto">
-                    {/* Personal context option */}
-                    <button
-                      type="button"
-                      onClick={() => handleSwitchVoyage('personal')}
-                      className={`w-full px-3 py-2 text-left hover:bg-purple-500/10 transition-colors ${
-                        !currentVoyage ? 'bg-purple-500/10' : ''
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="text-slate-300 text-sm flex items-center gap-2">
-                          {!currentVoyage && <span className="text-purple-400">→</span>}
-                          Personal
-                        </div>
-                        <span className="text-slate-600 text-[10px]">private</span>
-                      </div>
-                      <div className="text-slate-500 text-xs mt-0.5">Your private space</div>
-                    </button>
-                    {/* User voyages */}
-                    {voyages.map((voyage) => (
-                      <button
-                        key={voyage.id}
-                        type="button"
-                        onClick={() => handleSwitchVoyage(voyage.slug)}
-                        className={`w-full px-3 py-2 text-left hover:bg-purple-500/10 transition-colors ${
-                          currentVoyage?.slug === voyage.slug ? 'bg-purple-500/10' : ''
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="text-slate-300 text-sm flex items-center gap-2">
-                            {currentVoyage?.slug === voyage.slug && <span className="text-purple-400">→</span>}
-                            {voyage.name}
-                          </div>
-                          <span className="text-purple-400 text-[10px]">{voyage.role}</span>
-                        </div>
-                        <div className="text-slate-600 text-[10px] mt-0.5">/{voyage.slug}</div>
-                      </button>
-                    ))}
-                    {voyages.length === 0 && (
-                      <div className="px-3 py-4 text-slate-500 text-xs">
-                        No voyages yet. Use <span className="text-purple-400">/create-voyage</span> to start one.
-                      </div>
-                    )}
-                  </div>
-                )}
-                {/* Create voyage button */}
-                <div className="px-3 py-2 border-t border-purple-500/20">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowVoyagePicker(false);
-                      handleCreateVoyageCommand();
-                    }}
-                    className="text-purple-400 text-xs hover:text-purple-300 transition"
-                  >
-                    + Create new voyage
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+          ...
         )}
+        */}
 
         {/* Create Voyage Form */}
         {showCreateVoyage && (
