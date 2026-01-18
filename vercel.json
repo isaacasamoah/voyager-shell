@@ -1,11 +1,5 @@
 {
   "framework": "nextjs",
   "buildCommand": "npm run build",
-  "installCommand": "npm install",
-  "crons": [
-    {
-      "path": "/api/internal/agents/worker",
-      "schedule": "* * * * *"
-    }
-  ]
+  "installCommand": "npm install"
 }
