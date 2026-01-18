@@ -1,6 +1,19 @@
 // Inline component registry
 // Components Voyager can render inline in conversation
 
+// Component lifecycle state
+export type ComponentState =
+  | 'active'     // Interactive, waiting for user action
+  | 'resolved'   // User made selection, show collapsed
+  | 'dismissed'  // User closed without action
+
+// Resolution data when component is resolved
+export interface ComponentResolution {
+  action: string        // What action was taken (e.g., 'selected', 'submitted')
+  value?: unknown       // The selected/submitted value
+  label?: string        // Human-readable label for display
+}
+
 export type ComponentType =
   | 'voyage_picker'       // List of voyages to select
   | 'conversation_picker' // List of conversations to resume
@@ -15,7 +28,9 @@ export interface InlineComponent {
   id: string
   type: ComponentType
   props: Record<string, unknown>
-  ephemeral: boolean // Disappear after action or persist
+  ephemeral: boolean       // Don't persist to conversation history
+  state: ComponentState    // Current lifecycle state
+  resolution?: ComponentResolution  // Present when state is 'resolved'
 }
 
 // Component specifications
@@ -138,6 +153,7 @@ export const createComponent = <T extends ComponentType>(
     type,
     props,
     ephemeral: spec.ephemeral,
+    state: 'active',
   }
 }
 
@@ -184,3 +200,99 @@ export const authPrompt = (
   onCancel: () => void
 ): InlineComponent =>
   createComponent('auth_prompt', { mode, onSubmit, onCancel })
+
+// ═══════════════════════════════════════════════════════════
+// MESSAGE PARTS - For rendering in message stream
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * A part of a message - either text or a component.
+ */
+export type MessagePart =
+  | { type: 'text'; text: string }
+  | { type: 'component'; component: InlineComponent }
+
+/**
+ * A UI message that can be injected into the message stream.
+ * Extends the AI SDK UIMessage pattern.
+ */
+export interface UIComponentMessage {
+  id: string
+  role: 'assistant'
+  parts: MessagePart[]
+  ephemeral: boolean  // If true, don't persist to conversation history
+  createdAt: Date
+}
+
+/**
+ * Create a UI message with text and optional components.
+ */
+export const createUIMessage = (
+  text: string,
+  components: InlineComponent[] = [],
+  ephemeral = true
+): UIComponentMessage => {
+  const parts: MessagePart[] = [{ type: 'text', text }]
+
+  for (const component of components) {
+    parts.push({ type: 'component', component })
+  }
+
+  return {
+    id: `ui-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    role: 'assistant',
+    parts,
+    ephemeral,
+    createdAt: new Date(),
+  }
+}
+
+/**
+ * Resolve a component in a message (mark as resolved with result).
+ */
+export const resolveComponent = (
+  message: UIComponentMessage,
+  componentId: string,
+  resolution: ComponentResolution
+): UIComponentMessage => {
+  return {
+    ...message,
+    parts: message.parts.map(part => {
+      if (part.type === 'component' && part.component.id === componentId) {
+        return {
+          ...part,
+          component: {
+            ...part.component,
+            state: 'resolved' as const,
+            resolution,
+          },
+        }
+      }
+      return part
+    }),
+  }
+}
+
+/**
+ * Dismiss a component in a message (mark as dismissed).
+ */
+export const dismissComponent = (
+  message: UIComponentMessage,
+  componentId: string
+): UIComponentMessage => {
+  return {
+    ...message,
+    parts: message.parts.map(part => {
+      if (part.type === 'component' && part.component.id === componentId) {
+        return {
+          ...part,
+          component: {
+            ...part.component,
+            state: 'dismissed' as const,
+          },
+        }
+      }
+      return part
+    }),
+  }
+}
