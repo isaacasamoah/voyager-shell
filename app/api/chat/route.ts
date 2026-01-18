@@ -19,6 +19,7 @@ import { emitMessageEvent, type KnowledgeNode } from '@/lib/knowledge';
 import { logRetrievalEvent, logCitations, createRetrievalTools } from '@/lib/retrieval';
 import { getAuthenticatedUserId } from '@/lib/auth';
 import { runDeepRetrieval } from '@/lib/agents/deep-retrieval';
+import { classifySearchDepth } from '@/lib/agents/depth-classifier';
 import { modelRouter, creditTracker } from '@/lib/models';
 import { log } from '@/lib/debug';
 
@@ -283,6 +284,14 @@ export const POST = async (req: Request) => {
     } catch (error) {
       log.api('Prompt composition failed, using base prompt', { error: String(error) }, 'warn');
       systemPrompt = getBasePrompt();
+    }
+
+    // Classify query depth to determine if deep retrieval will run
+    // If comprehensive, let Voyager know naturally so it can set expectations
+    const queryDepth = classifySearchDepth(queryText);
+    if (queryDepth === 'comprehensive') {
+      log.agent('Comprehensive query - adding deep search awareness to prompt');
+      systemPrompt += `\n\n[Context: This looks like a broad question. You're searching your memory more thoroughly in the background. Answer naturally with what you know now - if you find more context, you'll share it as a follow-up. Don't mention "deep retrieval" or technical terms - just be natural about it, like "let me think about everything we've discussed..." or "I'm pulling together what I remember..."]`;
     }
 
     // Create retrieval tools (kept for reference, not currently used)

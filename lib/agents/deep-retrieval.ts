@@ -11,10 +11,11 @@
 import { generateText } from 'ai'
 import { callGemini } from '@/lib/gemini/client'
 import { executeRetrievalCode, type RetrievalResult } from './executor'
+import { clusterFindings } from './clustering'
 import { getClientForContext } from '@/lib/supabase/authenticated'
 import type { KnowledgeNode } from '@/lib/knowledge'
 import { modelRouter } from '@/lib/models'
-import { classifySearchDepth } from './depth-classifier'
+import { classifySearchDepth, type SearchDepth } from './depth-classifier'
 import { IF_DECISION_PROMPT, HOW_STRATEGY_PROMPT, SYNTHESIS_PROMPT } from './primitives'
 
 // =============================================================================
@@ -38,6 +39,54 @@ interface IfDecision {
 interface RetrievalStrategy {
   code: string
   reasoning: string
+}
+
+// =============================================================================
+// Clustering Types (Two-Stage Compression)
+// =============================================================================
+
+export interface FindingCluster {
+  id: string                    // UUID
+  theme: string                 // "Pricing Decisions"
+  summary: string               // 1-2 sentence cluster summary
+  confidence: number            // Cluster coherence (0-1)
+  findings: Array<{
+    eventId: string
+    content: string
+    similarity?: number
+    isPinned?: boolean
+    connectedTo?: string[]
+  }>
+  representativeId: string      // eventId of most representative
+}
+
+export interface ClusteredResult {
+  clusters: FindingCluster[]
+  unclustered: Array<{
+    eventId: string
+    content: string
+    similarity?: number
+    isPinned?: boolean
+    connectedTo?: string[]
+  }>
+  totalFindings: number
+  clusteringMethod: 'topic' | 'temporal' | 'hybrid'
+}
+
+// What gets stored in agent_tasks.result
+export interface DeepRetrievalResult {
+  type: 'deep_retrieval'
+  summary: string               // Voyager's synthesis
+  clusters: FindingCluster[]    // For progressive disclosure
+  unclustered: Array<{
+    eventId: string
+    content: string
+    similarity?: number
+    isPinned?: boolean
+    connectedTo?: string[]
+  }>
+  confidence: number
+  totalFindings: number
 }
 
 // =============================================================================
@@ -135,31 +184,44 @@ Write retrieval code to deeply search for information about this query. Return {
 // =============================================================================
 
 /**
- * Voyager synthesizes raw findings into a conversational follow-up.
+ * Voyager synthesizes clustered findings into a conversational follow-up.
  * This maintains the "same Voyager voice" across fast and deep paths.
  */
-async function synthesizeFindings(
-  findings: RetrievalResult,
-  originalQuery: string
+async function synthesizeClusters(
+  clustered: ClusteredResult,
+  originalQuery: string,
+  conversationContext: string[]
 ): Promise<string> {
-  if (findings.findings.length === 0) {
+  if (clustered.totalFindings === 0) {
     return '' // Nothing to synthesize
   }
 
-  const findingsText = findings.findings
-    .slice(0, 5)
-    .map((f, i) => `${i + 1}. ${f.content.slice(0, 300)}${f.content.length > 300 ? '...' : ''}`)
+  // Build compact representation of clusters for synthesis
+  const clustersText = clustered.clusters
+    .map((c, i) => {
+      const representative = c.findings.find(f => f.eventId === c.representativeId) ?? c.findings[0]
+      return `Cluster ${i + 1}: "${c.theme}" (${c.findings.length} items)
+Summary: ${c.summary}
+Example: ${representative?.content.slice(0, 200)}...`
+    })
     .join('\n\n')
 
+  const unclusteredNote = clustered.unclustered.length > 0
+    ? `\n\n+ ${clustered.unclustered.length} additional items that didn't fit a clear theme.`
+    : ''
+
+  // Include recent conversation for natural follow-up
+  const recentContext = conversationContext.length > 0
+    ? `\nRecent conversation:\n${conversationContext.slice(-3).join('\n')}\n`
+    : ''
+
   const userPrompt = `Original query: "${originalQuery}"
+${recentContext}
+Deep search found ${clustered.totalFindings} results, organized into ${clustered.clusters.length} themes:
 
-Deep search found ${findings.findings.length} results (confidence: ${findings.confidence.toFixed(2)}):
+${clustersText}${unclusteredNote}
 
-${findingsText}
-
-${findings.summary ? `Agent summary: ${findings.summary}` : ''}
-
-Write a conversational follow-up to share these findings:`
+Write a conversational follow-up (2-4 sentences) that connects these findings to the conversation. Be natural, don't just list themes:`
 
   try {
     const response = await generateText({
@@ -171,8 +233,9 @@ Write a conversational follow-up to share these findings:`
     return response.text.trim()
   } catch (error) {
     console.error('[DeepRetrieval] Synthesis failed:', error)
-    // Fallback: return a generic message
-    return `I found ${findings.findings.length} additional items that might be relevant. Let me know if you'd like me to elaborate.`
+    // Fallback: list themes
+    const themeList = clustered.clusters.map(c => c.theme).join(', ')
+    return `I found ${clustered.totalFindings} additional items organized into themes: ${themeList}. Click to expand any theme for details.`
   }
 }
 
@@ -181,18 +244,29 @@ Write a conversational follow-up to share these findings:`
 // =============================================================================
 
 /**
- * Save the synthesized result to agent_tasks for Realtime surfacing.
+ * Save the clustered result to agent_tasks for Realtime surfacing.
+ * Stores full cluster structure for progressive disclosure UI.
  */
 async function saveAgentResult(
   conversationId: string,
   userId: string,
   result: {
     summary: string
-    findings: RetrievalResult['findings']
+    clustered: ClusteredResult
     confidence: number
   }
 ): Promise<void> {
   const supabase = getClientForContext({ userId })
+
+  // Build result conforming to DeepRetrievalResult interface
+  const dbResult: DeepRetrievalResult = {
+    type: 'deep_retrieval',
+    summary: result.summary,
+    clusters: result.clustered.clusters,
+    unclustered: result.clustered.unclustered,
+    confidence: result.confidence,
+    totalFindings: result.clustered.totalFindings,
+  }
 
   // Note: Using type assertion until we regenerate Supabase types
   const { error } = await (supabase as any)
@@ -205,12 +279,7 @@ async function saveAgentResult(
       conversation_id: conversationId,
       status: 'complete',
       completed_at: new Date().toISOString(),
-      result: {
-        summary: result.summary,
-        findings: result.findings,
-        confidence: result.confidence,
-        type: 'deep_retrieval', // For UI to identify result type
-      },
+      result: dbResult,
     })
 
   if (error) {
@@ -289,8 +358,18 @@ export async function runDeepRetrieval(input: DeepRetrievalInput): Promise<void>
       return
     }
 
-    // Step 4: Synthesize findings (Claude - same Voyager voice)
-    const synthesis = await synthesizeFindings(findings, input.query)
+    // Step 3.5: Cluster findings (Gemini Flash for 10+ findings)
+    // Small result sets get a single "Results" cluster, no LLM overhead
+    const clustered = await clusterFindings(findings.findings, input.query)
+
+    console.log('[DeepRetrieval] Clustering complete:', {
+      clusters: clustered.clusters.length,
+      unclustered: clustered.unclustered.length,
+      method: clustered.clusteringMethod,
+    })
+
+    // Step 4: Synthesize clusters (Claude - same Voyager voice)
+    const synthesis = await synthesizeClusters(clustered, input.query, input.conversationContext)
 
     // Skip if synthesis is empty
     if (!synthesis) {
@@ -298,16 +377,17 @@ export async function runDeepRetrieval(input: DeepRetrievalInput): Promise<void>
       return
     }
 
-    // Step 5: Save for Realtime surfacing
+    // Step 5: Save for Realtime surfacing (with cluster structure)
     await saveAgentResult(input.conversationId, input.userId, {
       summary: synthesis,
-      findings: findings.findings,
+      clustered,
       confidence: findings.confidence,
     })
 
     console.log('[DeepRetrieval] Complete:', {
       durationMs: Date.now() - startTime,
       findingsCount: findings.findings.length,
+      clusters: clustered.clusters.length,
     })
   } catch (error) {
     console.error('[DeepRetrieval] Failed:', error)

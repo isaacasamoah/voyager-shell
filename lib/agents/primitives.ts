@@ -5,6 +5,7 @@
 // Prompts extracted here can be imported by implementation files.
 
 import type { ModelRequirements } from '@/lib/models/router'
+import { generateHowStrategyPrompt } from './retrieval-tools'
 
 // =============================================================================
 // Types
@@ -58,27 +59,35 @@ Be conservative. Only say YES when deeper search would actually add value.`
 /**
  * HOW Strategy prompt - Claude generates retrieval code.
  * The "Claude as Query Compiler" pattern.
+ *
+ * Now dynamically generated from structured tool definitions.
+ * See lib/agents/retrieval-tools.ts for tool definitions and patterns.
  */
-export const HOW_STRATEGY_PROMPT = `You are a retrieval specialist. Generate JavaScript code to deeply search knowledge for the user's query.
+export const HOW_STRATEGY_PROMPT = generateHowStrategyPrompt()
 
-Available functions:
-- semanticSearch(query, { limit?, threshold? }) - Returns nodes with: eventId, content, similarity
-- keywordGrep(pattern, { caseSensitive?, limit? }) - Returns nodes with: eventId, content
-- getConnected(nodeId) - Follow graph edges. IMPORTANT: Pass node.eventId (not node.id)
-- searchByTime(since, { until?, query?, limit? }) - Temporal queries ("last week", "yesterday")
-- getNodes(ids) - Fetch nodes by ID array
-- dedupe(nodes) - Remove duplicates by eventId
+/**
+ * Clustering prompt - Gemini Flash groups findings by theme.
+ * Two-stage compression for progressive disclosure.
+ */
+export const CLUSTERING_PROMPT = `You cluster knowledge findings by theme.
 
-Node properties: { eventId, content, similarity?, isPinned?, connectedTo? }
-Use node.eventId when calling getConnected, not node.id.
+Input format: Each finding is numbered (0, 1, 2...). Use these NUMBERS as findingIds.
 
-Strategy chains:
-- semantic → getConnected → keywordGrep (concept → context → precision)
-- searchByTime → semantic (when → what)
+Rules:
+- Max 5 clusters, minimum 2 findings per cluster
+- Each finding belongs to exactly one cluster
+- Cluster names: 2-4 words (e.g., "Pricing Decisions", "Technical Architecture")
+- If a finding doesn't fit any theme, add its NUMBER to "unclustered"
+- Write a 1-sentence summary for each cluster
+- Prioritize pinned findings (marked PINNED)
 
-Return: { findings: [...nodes], confidence: 0-1, summary?: "brief explanation" }
-
-Write clean, async JavaScript. Focus on effectiveness.`
+Output JSON only (no markdown, no explanation):
+{
+  "clusters": [
+    { "theme": "Theme Name", "summary": "One sentence about this cluster.", "findingIds": ["0", "1", "5"] }
+  ],
+  "unclustered": ["3", "7"]
+}`
 
 /**
  * Synthesis prompt - Claude writes conversational follow-up.

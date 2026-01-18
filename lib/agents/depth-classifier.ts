@@ -48,9 +48,11 @@ const COMPREHENSIVE_SIGNALS = {
   ],
   // Regex patterns for more complex matching
   patterns: [
-    /everything.*(about|regarding|on)/i,
-    /\ball\b.*\b(discussions?|mentions?|references?)\b/i,
+    /everything.*(about|regarding|on|from)/i,
+    /give me everything/i,
+    /\ball\b.*\b(discussions?|mentions?|references?|conversations?)\b/i,
     /\bsummarize\b.*\b(all|everything)\b/i,
+    /\bsummar(y|ize|ise)\b/i, // Any summary request
   ],
 };
 

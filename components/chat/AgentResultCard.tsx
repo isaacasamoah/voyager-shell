@@ -2,10 +2,11 @@
 // Displays background agent findings that surfaced via Realtime
 //
 // Design: Voyager synthesizes raw findings into conversational follow-up
-// The summary is the main content, sources are expandable for transparency
+// Supports progressive disclosure with themed clusters
+// The summary is the main content, clusters are expandable for transparency
 
 import React, { useState } from 'react'
-import { Sparkles, ChevronDown, ChevronUp, X, FileText } from 'lucide-react'
+import { Sparkles, ChevronDown, ChevronUp, X, FileText, Folder, FolderOpen } from 'lucide-react'
 
 interface Finding {
   eventId: string
@@ -14,11 +15,25 @@ interface Finding {
   isPinned?: boolean
 }
 
+interface FindingCluster {
+  id: string
+  theme: string
+  summary: string
+  confidence: number
+  findings: Finding[]
+  representativeId: string
+}
+
 interface AgentResult {
   id: string
   task: string
   result: {
-    findings: Finding[]
+    // Legacy flat findings (backwards compatible)
+    findings?: Finding[]
+    // New clustered structure
+    clusters?: FindingCluster[]
+    unclustered?: Finding[]
+    totalFindings?: number
     confidence: number
     summary?: string
     type?: string // 'deep_retrieval' for parallel paths
@@ -30,13 +45,73 @@ interface AgentResultCardProps {
   onDismiss: () => void
 }
 
+// Cluster item component for progressive disclosure
+const ClusterItem = ({ cluster }: { cluster: FindingCluster }) => {
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <div className="border border-white/5 rounded-lg overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-white/5 transition-colors"
+      >
+        {expanded ? (
+          <FolderOpen className="w-4 h-4 text-indigo-400 flex-shrink-0" />
+        ) : (
+          <Folder className="w-4 h-4 text-indigo-400 flex-shrink-0" />
+        )}
+        <span className="text-sm text-slate-200 flex-1 truncate">{cluster.theme}</span>
+        <span className="text-xs text-slate-500">
+          {cluster.findings.length} item{cluster.findings.length !== 1 ? 's' : ''}
+        </span>
+        {expanded ? (
+          <ChevronUp className="w-3.5 h-3.5 text-slate-500" />
+        ) : (
+          <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+        )}
+      </button>
+
+      {expanded && (
+        <div className="px-3 pb-3 space-y-2 border-t border-white/5">
+          {/* Cluster summary */}
+          <p className="text-xs text-slate-400 pt-2 italic">{cluster.summary}</p>
+
+          {/* Findings in cluster */}
+          {cluster.findings.map((finding, idx) => (
+            <div
+              key={finding.eventId || idx}
+              className="bg-black/30 rounded p-2.5 text-sm"
+            >
+              <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
+                {finding.isPinned && (
+                  <span className="text-amber-400 font-medium">Pinned</span>
+                )}
+                {finding.similarity !== undefined && (
+                  <span>{Math.round(finding.similarity * 100)}% match</span>
+                )}
+              </div>
+              <p className="text-slate-300 whitespace-pre-wrap text-sm">
+                {finding.content}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export const AgentResultCard = ({ result, onDismiss }: AgentResultCardProps) => {
   const [showSources, setShowSources] = useState(false)
 
-  const { findings, summary } = result.result
-  const findingsCount = findings.length
+  const { findings, clusters, unclustered, summary, totalFindings } = result.result
 
-  // If no findings and no summary, don't render
+  // Determine what to show: new cluster structure or legacy findings
+  const hasClusters = clusters && clusters.length > 0
+  const legacyFindings = findings ?? []
+  const findingsCount = totalFindings ?? legacyFindings.length
+
+  // If nothing to show, don't render
   if (findingsCount === 0 && !summary) {
     return null
   }
@@ -68,7 +143,7 @@ export const AgentResultCard = ({ result, onDismiss }: AgentResultCardProps) => 
             >
               <FileText className="w-3.5 h-3.5" />
               <span>
-                {showSources ? 'Hide' : 'Show'} {findingsCount} source{findingsCount !== 1 ? 's' : ''}
+                {showSources ? 'Hide' : 'Show'} {hasClusters ? `${clusters.length} themes` : `${findingsCount} source${findingsCount !== 1 ? 's' : ''}`}
               </span>
               {showSources ? (
                 <ChevronUp className="w-3 h-3" />
@@ -78,29 +153,56 @@ export const AgentResultCard = ({ result, onDismiss }: AgentResultCardProps) => 
             </button>
           )}
 
-          {/* Expanded sources */}
+          {/* Expanded: Clusters or legacy findings */}
           {showSources && (
             <div className="mt-3 space-y-2 border-t border-white/5 pt-3">
-              {findings.map((finding, idx) => (
-                <div
-                  key={finding.eventId || idx}
-                  className="bg-black/30 rounded p-3 text-sm"
-                >
-                  <div className="flex items-center gap-2 text-xs text-slate-500 mb-1.5">
-                    {finding.isPinned && (
-                      <span className="text-amber-400 font-medium">Pinned</span>
-                    )}
-                    {finding.similarity && (
-                      <span className="text-slate-500">
-                        {Math.round(finding.similarity * 100)}% match
-                      </span>
-                    )}
+              {hasClusters ? (
+                <>
+                  {/* Clustered findings */}
+                  {clusters.map((cluster) => (
+                    <ClusterItem key={cluster.id} cluster={cluster} />
+                  ))}
+
+                  {/* Unclustered findings */}
+                  {unclustered && unclustered.length > 0 && (
+                    <div className="pt-2">
+                      <p className="text-xs text-slate-500 mb-2">
+                        + {unclustered.length} additional item{unclustered.length !== 1 ? 's' : ''}
+                      </p>
+                      {unclustered.map((finding, idx) => (
+                        <div
+                          key={finding.eventId || idx}
+                          className="bg-black/30 rounded p-2.5 text-sm mb-2"
+                        >
+                          <p className="text-slate-300 whitespace-pre-wrap">
+                            {finding.content}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                /* Legacy: flat findings list */
+                legacyFindings.map((finding, idx) => (
+                  <div
+                    key={finding.eventId || idx}
+                    className="bg-black/30 rounded p-3 text-sm"
+                  >
+                    <div className="flex items-center gap-2 text-xs text-slate-500 mb-1.5">
+                      {finding.isPinned && (
+                        <span className="text-amber-400 font-medium">Pinned</span>
+                      )}
+                      {finding.similarity !== undefined && (
+                        <span>{Math.round(finding.similarity * 100)}% match</span>
+                      )}
+                    </div>
+                    <p className="text-slate-300 whitespace-pre-wrap">
+                      {finding.content}
+                    </p>
                   </div>
-                  <p className="text-slate-300 whitespace-pre-wrap">
-                    {finding.content}
-                  </p>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           )}
         </div>

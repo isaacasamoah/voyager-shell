@@ -81,19 +81,42 @@ interface ResumableResponse {
   conversations: ResumableConversation[];
 }
 
-// Agent result from background worker
+// Agent result from background worker (supports clustered and legacy flat findings)
 interface AgentResult {
   id: string;
   task: string;
   result: {
-    findings: Array<{
+    // Legacy flat findings (backwards compatible)
+    findings?: Array<{
       eventId: string;
       content: string;
       similarity?: number;
       isPinned?: boolean;
     }>;
+    // New clustered structure
+    clusters?: Array<{
+      id: string;
+      theme: string;
+      summary: string;
+      confidence: number;
+      findings: Array<{
+        eventId: string;
+        content: string;
+        similarity?: number;
+        isPinned?: boolean;
+      }>;
+      representativeId: string;
+    }>;
+    unclustered?: Array<{
+      eventId: string;
+      content: string;
+      similarity?: number;
+      isPinned?: boolean;
+    }>;
+    totalFindings?: number;
     confidence: number;
     summary?: string;
+    type?: string;
   };
 }
 
@@ -287,7 +310,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
       .on(
         'postgres_changes',
         {
-          event: 'UPDATE',
+          event: 'INSERT',
           schema: 'public',
           table: 'agent_tasks',
           filter: `conversation_id=eq.${conversationId}`,
@@ -295,6 +318,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
         (payload) => {
           const newData = payload.new as Record<string, unknown>;
           if (newData.status === 'complete' && newData.result) {
+            log.agent('Deep retrieval result received', { taskId: newData.id });
             setAgentResults((prev) => [
               ...prev,
               {
@@ -1011,36 +1035,40 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
             <span className="font-bold tracking-wider group-hover:underline decoration-indigo-500/30 underline-offset-4">VOYAGER_SHELL</span>
           </div>
 
-          <div className="h-4 w-[1px] bg-white/10 mx-1"></div>
+          {/* Context Chips - only show when authenticated */}
+          {isAuthenticated && (
+            <>
+              <div className="h-4 w-[1px] bg-white/10 mx-1"></div>
 
-          {/* Context Chips */}
-          <div className="flex gap-2">
-            {/* Voyage context chip */}
-            {currentVoyage ? (
-              <button
-                type="button"
-                onClick={handleVoyagesCommand}
-                className="px-2 py-1 rounded-sm border border-purple-500/30 bg-purple-500/10 text-purple-300 text-xs flex items-center gap-2 cursor-pointer hover:bg-purple-500/20 transition shadow-[0_0_10px_rgba(168,85,247,0.1)]"
-              >
-                <Ship size={10} />
-                <span className="opacity-30 font-semibold">$VOY:</span> {currentVoyage.name.toUpperCase().replace(/\s+/g, '_')}
-                <span className="opacity-50 text-[10px]">({currentVoyage.role})</span>
-              </button>
-            ) : isAuthenticated ? (
-              <button
-                type="button"
-                onClick={handleVoyagesCommand}
-                className="px-2 py-1 rounded-sm border border-slate-700 bg-slate-800/50 text-slate-400 text-xs flex items-center gap-2 cursor-pointer hover:bg-slate-700/50 transition"
-              >
-                <Ship size={10} />
-                <span className="opacity-30 font-semibold">$VOY:</span> PERSONAL
-              </button>
-            ) : null}
-            {/* Conversation context chip */}
-            <div className="px-2 py-1 rounded-sm border border-indigo-500/30 bg-indigo-500/10 text-indigo-300 text-xs flex items-center gap-2 cursor-pointer hover:bg-indigo-500/20 transition shadow-[0_0_10px_rgba(99,102,241,0.1)]">
-              <span className="opacity-30 font-semibold">$CTX:</span> {conversationTitle || 'NEW_SESSION'}
-            </div>
-          </div>
+              <div className="flex gap-2">
+                {/* Voyage context chip */}
+                {currentVoyage ? (
+                  <button
+                    type="button"
+                    onClick={handleVoyagesCommand}
+                    className="px-2 py-1 rounded-sm border border-purple-500/30 bg-purple-500/10 text-purple-300 text-xs flex items-center gap-2 cursor-pointer hover:bg-purple-500/20 transition shadow-[0_0_10px_rgba(168,85,247,0.1)]"
+                  >
+                    <Ship size={10} />
+                    <span className="opacity-30 font-semibold">$VOY:</span> {currentVoyage.name.toUpperCase().replace(/\s+/g, '_')}
+                    <span className="opacity-50 text-[10px]">({currentVoyage.role})</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleVoyagesCommand}
+                    className="px-2 py-1 rounded-sm border border-slate-700 bg-slate-800/50 text-slate-400 text-xs flex items-center gap-2 cursor-pointer hover:bg-slate-700/50 transition"
+                  >
+                    <Ship size={10} />
+                    <span className="opacity-30 font-semibold">$VOY:</span> PERSONAL
+                  </button>
+                )}
+                {/* Conversation context chip */}
+                <div className="px-2 py-1 rounded-sm border border-indigo-500/30 bg-indigo-500/10 text-indigo-300 text-xs flex items-center gap-2 cursor-pointer hover:bg-indigo-500/20 transition shadow-[0_0_10px_rgba(99,102,241,0.1)]">
+                  <span className="opacity-30 font-semibold">$CTX:</span> {conversationTitle || 'NEW_SESSION'}
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="flex items-center gap-2 text-[10px] text-green-500/80 font-bold tracking-widest uppercase">
