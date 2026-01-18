@@ -28,7 +28,7 @@ export const GET = async () => {
 
     const voyages = await getUserVoyages(userId);
 
-    console.log('[Voyages API] Found', voyages.length, 'voyages');
+    console.log('[Voyages API] Found', voyages.length, 'voyages:', voyages.map(v => `${v.name} (${v.slug})`).join(', '));
 
     return NextResponse.json({
       voyages: voyages.map((v) => ({

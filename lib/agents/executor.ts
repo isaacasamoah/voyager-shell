@@ -36,6 +36,43 @@ export interface RetrievalResult {
 }
 
 // =============================================================================
+// Date Parsing Helper
+// =============================================================================
+
+/**
+ * Parse relative date strings like "7d", "30d", "yesterday"
+ */
+const parseSinceDate = (input: string): Date => {
+  const now = new Date()
+  const lower = input.toLowerCase().trim()
+
+  // Check for short format like "7d", "30d"
+  const shortMatch = lower.match(/^(\d+)([dhwm])$/)
+  if (shortMatch) {
+    const amount = parseInt(shortMatch[1])
+    const unit = shortMatch[2]
+    if (unit === 'd') return new Date(now.setDate(now.getDate() - amount))
+    if (unit === 'h') return new Date(now.setHours(now.getHours() - amount))
+    if (unit === 'w') return new Date(now.setDate(now.getDate() - amount * 7))
+    if (unit === 'm') return new Date(now.setMonth(now.getMonth() - amount))
+  }
+
+  // Check for ISO date format
+  if (/^\d{4}-\d{2}-\d{2}/.test(lower)) {
+    return new Date(input)
+  }
+
+  // Natural language
+  if (lower === 'today') return new Date(now.setHours(0, 0, 0, 0))
+  if (lower === 'yesterday') return new Date(now.setDate(now.getDate() - 1))
+  if (lower === 'last week') return new Date(now.setDate(now.getDate() - 7))
+  if (lower === 'last month') return new Date(now.setMonth(now.getMonth() - 1))
+
+  // Default to 7 days ago
+  return new Date(now.setDate(now.getDate() - 7))
+}
+
+// =============================================================================
 // Bound Functions (available to generated code)
 // =============================================================================
 
@@ -44,6 +81,119 @@ export interface RetrievalResult {
  * These are the only functions available in the generated code sandbox.
  */
 const createBoundFunctions = (ctx: ExecutionContext) => ({
+  // =========================================================================
+  // INTROSPECTION - Understanding what exists before searching
+  // =========================================================================
+
+  /**
+   * Get knowledge statistics for the current scope.
+   * Use this first for comprehensive/summary queries.
+   */
+  getKnowledgeStats: async (): Promise<{
+    count: number
+    dateRange: { oldest: string; newest: string } | null
+    topicClusters: string[]
+    voyages: string[]
+  }> => {
+    const { getClientForContext } = await import('@/lib/supabase/authenticated')
+    const supabase = getClientForContext({ userId: ctx.userId })
+
+    // Get count and date range
+    let query = (supabase as any)
+      .from('knowledge_current')
+      .select('event_id, source_created_at, voyage_slug, topics', { count: 'exact' })
+      .eq('is_active', true)
+
+    if (ctx.voyageSlug) {
+      query = query.or(`user_id.eq.${ctx.userId},voyage_slug.eq.${ctx.voyageSlug}`)
+    } else {
+      query = query.eq('user_id', ctx.userId)
+    }
+
+    const { data, count, error } = await query.order('source_created_at', { ascending: false })
+
+    if (error || !data) {
+      console.error('[getKnowledgeStats] Error:', error)
+      return { count: 0, dateRange: null, topicClusters: [], voyages: [] }
+    }
+
+    // Extract unique topics and voyages
+    const topicsSet = new Set<string>()
+    const voyagesSet = new Set<string>()
+
+    data.forEach((row: { topics?: string[]; voyage_slug?: string }) => {
+      if (row.topics) row.topics.forEach((t: string) => topicsSet.add(t))
+      if (row.voyage_slug) voyagesSet.add(row.voyage_slug)
+    })
+
+    const oldest = data.length > 0 ? data[data.length - 1].source_created_at : null
+    const newest = data.length > 0 ? data[0].source_created_at : null
+
+    return {
+      count: count ?? data.length,
+      dateRange: oldest && newest ? { oldest, newest } : null,
+      topicClusters: Array.from(topicsSet).slice(0, 20), // Top 20 topics
+      voyages: Array.from(voyagesSet),
+    }
+  },
+
+  /**
+   * Get all knowledge in scope without search.
+   * Direct access for comprehensive queries.
+   */
+  getScopeDump: async (opts?: {
+    limit?: number
+    since?: string
+  }): Promise<KnowledgeNode[]> => {
+    const { getClientForContext } = await import('@/lib/supabase/authenticated')
+    const supabase = getClientForContext({ userId: ctx.userId })
+    const limit = opts?.limit ?? 100
+
+    let query = (supabase as any)
+      .from('knowledge_current')
+      .select('*')
+      .eq('is_active', true)
+      .order('source_created_at', { ascending: false })
+      .limit(Math.min(limit, 200))
+
+    // Scope to user/voyage
+    if (ctx.voyageSlug) {
+      query = query.or(`user_id.eq.${ctx.userId},voyage_slug.eq.${ctx.voyageSlug}`)
+    } else {
+      query = query.eq('user_id', ctx.userId)
+    }
+
+    // Optional time filter
+    if (opts?.since) {
+      const sinceDate = parseSinceDate(opts.since)
+      query = query.gte('source_created_at', sinceDate.toISOString())
+    }
+
+    const { data, error } = await query
+
+    if (error || !data) {
+      console.error('[getScopeDump] Error:', error)
+      return []
+    }
+
+    return data.map((row: Record<string, unknown>) => ({
+      eventId: row.event_id as string,
+      content: row.content as string,
+      classifications: (row.classifications as string[]) ?? [],
+      entities: (row.entities as string[]) ?? [],
+      topics: (row.topics as string[]) ?? [],
+      isActive: row.is_active as boolean,
+      isPinned: row.is_pinned as boolean,
+      importance: row.importance as number,
+      connectedTo: (row.connected_to as string[]) ?? [],
+      createdAt: new Date(row.source_created_at as string),
+    }))
+  },
+
+  // =========================================================================
+  // SEARCH - Finding specific content
+  // =========================================================================
+
   /**
    * Semantic search - conceptual queries
    */
