@@ -83,6 +83,23 @@ npm run build    # production build
 - Arrow function components
 - Files under 250 lines (except VoyagerInterface)
 
+## Established Patterns
+
+**Reference before implementing:** `.claude/skills/patterns/SKILL.md`
+
+| Pattern | Location | Purpose |
+|---------|----------|---------|
+| Agent Primitives | `lib/agents/primitives.ts` | Declarative agent definitions |
+| Tool Definitions | `lib/prompts/types.ts` | Standard tool interface |
+| Executor Tools | `lib/agents/retrieval-tools.ts` | Code sandbox tool definitions |
+| Debug Logging | `lib/debug/logger.ts` | Toggleable structured logging |
+| Model Router | `lib/models/router.ts` | Model selection by task/quality |
+
+**Three Agent Classes:**
+- **Primary (conversational)** — NO tools, uses pre-fetched context, responds fast
+- **Event-driven (decision)** — Quick decisions, <500ms, Gemini Flash
+- **Async background** — Full tool access, heavy lifting via waitUntil
+
 ## Specs
 
 **Master spec:** `~/.claude/research/voyager-v2/VOYAGER-MVP.md`
