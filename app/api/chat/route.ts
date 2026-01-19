@@ -19,8 +19,45 @@ import { emitMessageEvent, type KnowledgeNode } from '@/lib/knowledge';
 import { logRetrievalEvent, logCitations, createVoyagerTools } from '@/lib/retrieval';
 import { getAuthenticatedUserId } from '@/lib/auth';
 import { classifySearchDepth } from '@/lib/agents/depth-classifier';
+import { getCompletedTasksForConversation, type AgentTask } from '@/lib/agents/queue';
 import { modelRouter, creditTracker } from '@/lib/models';
 import { log } from '@/lib/debug';
+
+/**
+ * Format completed background tasks for Voyager's context.
+ * Gives Voyager awareness of what background agents found.
+ */
+const formatCompletedTasks = (tasks: AgentTask[]): string => {
+  if (tasks.length === 0) return '';
+
+  const lines = ['[Background Research Completed]', ''];
+  for (const task of tasks) {
+    lines.push(`Task: ${task.task}`);
+    if (task.result) {
+      const { findings, summary, confidence } = task.result;
+      if (summary) {
+        lines.push(`Summary: ${summary}`);
+      }
+      lines.push(`Found ${findings.length} relevant items (confidence: ${Math.round(confidence * 100)}%)`);
+
+      // Include key findings (first few)
+      const keyFindings = findings.slice(0, 5);
+      if (keyFindings.length > 0) {
+        lines.push('Key findings:');
+        for (const finding of keyFindings) {
+          const preview = finding.content.slice(0, 200).replace(/\n/g, ' ');
+          lines.push(`- ${preview}${finding.content.length > 200 ? '...' : ''}`);
+        }
+        if (findings.length > 5) {
+          lines.push(`- (${findings.length - 5} more items found)`);
+        }
+      }
+    }
+    lines.push('');
+  }
+  lines.push('Use this research to inform your response. Reference specific findings when relevant.');
+  return lines.join('\n');
+};
 
 export const maxDuration = 30;
 
@@ -291,6 +328,19 @@ export const POST = async (req: Request) => {
     if (queryDepth === 'comprehensive') {
       log.agent('Comprehensive query - adding deep search awareness to prompt');
       systemPrompt += `\n\n[Context: This looks like a broad question. You're searching your memory more thoroughly in the background. Answer naturally with what you know now - if you find more context, you'll share it as a follow-up. Don't mention "deep retrieval" or technical terms - just be natural about it, like "let me think about everything we've discussed..." or "I'm pulling together what I remember..."]`;
+    }
+
+    // Check for completed background tasks (context injection)
+    // This gives Voyager awareness of what background agents found
+    if (conversationId) {
+      const completedTasks = await getCompletedTasksForConversation(conversationId);
+      if (completedTasks.length > 0) {
+        log.agent('Injecting completed task context', {
+          taskCount: completedTasks.length,
+          totalFindings: completedTasks.reduce((sum, t) => sum + (t.result?.findings.length ?? 0), 0),
+        });
+        systemPrompt += `\n\n${formatCompletedTasks(completedTasks)}`;
+      }
     }
 
     // Create Voyager tools (spawn_background_agent + web_search)

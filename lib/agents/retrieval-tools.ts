@@ -233,6 +233,24 @@ Return: \`{ findings: [...nodes], confidence: 0-1, summary?: "brief explanation"
 4. **Combine strategies** — often need introspection + search + graph
 5. **Lower thresholds** (0.4-0.5) for broad searches, higher (0.7+) for precise
 
+## CRITICAL: Code Format
+
+Write DIRECT code that ends with a return statement. Do NOT wrap code in a function definition.
+
+WRONG (function never called):
+\`\`\`javascript
+async function search() {
+  const results = await semanticSearch("topic");
+  return { findings: results };
+}
+\`\`\`
+
+CORRECT (direct code with return):
+\`\`\`javascript
+const results = await semanticSearch("topic");
+return { findings: results, confidence: 0.7 };
+\`\`\`
+
 Write clean async JavaScript. Focus on finding what the user actually needs.`
 }
 

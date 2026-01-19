@@ -259,6 +259,49 @@ export async function failTask(taskId: string, errorMessage: string): Promise<vo
 }
 
 /**
+ * Get completed tasks for a conversation (for context injection).
+ * Returns tasks completed in the current session that Voyager should know about.
+ */
+export async function getCompletedTasksForConversation(
+  conversationId: string,
+  options?: { since?: Date; limit?: number }
+): Promise<AgentTask[]> {
+  const supabase = getAdminClient()
+
+  // Default to last hour (session-scoped)
+  const since = options?.since ?? new Date(Date.now() - 60 * 60 * 1000)
+  const limit = options?.limit ?? 5
+
+  const { data, error } = await (supabase as any)
+    .from('agent_tasks')
+    .select('*')
+    .eq('conversation_id', conversationId)
+    .eq('status', 'complete')
+    .gte('completed_at', since.toISOString())
+    .order('completed_at', { ascending: false })
+    .limit(limit)
+
+  if (error) {
+    console.error('[AgentQueue] Failed to get completed tasks:', error)
+    return []
+  }
+
+  return (data ?? []).map((row: Record<string, unknown>) => ({
+    id: row.id as string,
+    task: row.task as string,
+    code: row.code as string,
+    priority: row.priority as 'low' | 'normal' | 'high',
+    userId: row.user_id as string,
+    voyageSlug: row.voyage_slug as string | undefined,
+    conversationId: row.conversation_id as string,
+    status: row.status as AgentTask['status'],
+    result: row.result as RetrievalResult | undefined,
+    durationMs: row.duration_ms as number | undefined,
+    createdAt: new Date(row.created_at as string),
+  }))
+}
+
+/**
  * Get pending task count (for monitoring).
  */
 export async function getPendingCount(): Promise<number> {

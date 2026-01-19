@@ -361,11 +361,22 @@ export async function executeRetrievalCode(
   const functionArgs = Object.keys(boundFunctions)
   const functionValues = Object.values(boundFunctions)
 
+  // Fix common issue: Claude wraps code in function definition but doesn't call it
+  // Detect and auto-call if we find a function definition without a call
+  let processedCode = code
+  const functionDefMatch = code.match(/^(?:async\s+)?function\s+(\w+)\s*\([^)]*\)\s*\{/m)
+  if (functionDefMatch && !code.includes(`${functionDefMatch[1]}(`)) {
+    // Function defined but never called - add the call
+    const funcName = functionDefMatch[1]
+    console.log(`[Executor] Auto-calling function: ${funcName}()`)
+    processedCode = `${code}\nreturn await ${funcName}();`
+  }
+
   let fn: (...args: unknown[]) => Promise<unknown>
   try {
     fn = new Function(
       ...functionArgs,
-      `return (async () => { ${code} })()`
+      `return (async () => { ${processedCode} })()`
     ) as (...args: unknown[]) => Promise<unknown>
   } catch (error) {
     throw new Error(
