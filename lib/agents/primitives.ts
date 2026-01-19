@@ -11,16 +11,42 @@ import { generateHowStrategyPrompt } from './retrieval-tools'
 // Types
 // =============================================================================
 
+/**
+ * Agent type taxonomy:
+ * - primary: Owns conversation, talks to user (Voyager)
+ * - background: Heavy lifting, reports to primary via realtime (Retrieval)
+ * - event: Triggered by system events, no user interaction (Curator)
+ * - scheduled: Runs on cron, no user interaction (Quartermaster)
+ */
+export type AgentType = 'primary' | 'background' | 'event' | 'scheduled'
+
+/**
+ * Event trigger for event-driven agents.
+ */
+export interface EventTrigger {
+  event: 'knowledge.created' | 'knowledge.updated' | 'conversation.ended'
+  filter?: Record<string, unknown>
+}
+
 export interface AgentDefinition {
   id: string
   name: string
   description: string
+  type: AgentType
   model: ModelRequirements
   tools: string[]
   systemPrompt: string | ((ctx: AgentContext) => string | Promise<string>)
   maxTokens?: number
   timeout?: number
-  type: 'conversational' | 'decision' | 'background'
+  // Primary agent properties
+  canSpawn?: string[]           // Agent IDs this agent can spawn (primary only)
+  // Background agent properties
+  reportsTo?: string            // Parent agent ID (background only)
+  tokenBudget?: number          // Max tokens for this agent's work
+  // Event agent properties
+  trigger?: EventTrigger        // What triggers this agent (event only)
+  // Scheduled agent properties
+  schedule?: string             // Cron expression (scheduled only)
 }
 
 export interface AgentContext {
@@ -111,71 +137,53 @@ If the findings mostly confirm the initial response, say so briefly.`
 /**
  * All agent definitions in one place.
  * Implementation files import these to ensure consistency.
+ *
+ * Agent Type Taxonomy:
+ * - primary: Owns conversation (Voyager)
+ * - background: Heavy lifting, reports to primary (Retrieval)
+ * - event: System-triggered (Curator)
+ * - scheduled: Cron-triggered (Quartermaster)
  */
 export const AGENT_REGISTRY: Record<string, AgentDefinition> = {
+  // =========================================================================
+  // PRIMARY AGENTS (own the conversation)
+  // =========================================================================
+
   /**
-   * Main Voyager conversational agent.
-   * Uses pre-fetched context, no retrieval tools.
+   * Voyager - the primary conversational agent.
+   * Has two tools: spawn_background_agent and web_search.
+   * Uses pre-fetched context for quick responses.
    */
   voyager: {
     id: 'voyager',
     name: 'Voyager',
-    description: 'Main conversational agent with pre-fetched context',
+    description: 'Primary conversational agent. Owns the relationship with user.',
+    type: 'primary',
     model: {
       task: 'chat',
       quality: 'balanced',
       streaming: true,
-      toolUse: false,
+      toolUse: true,
     },
-    tools: [], // Primary Voyager has NO tools - forces use of pre-fetched context
+    tools: ['spawn_background_agent', 'web_search'],
+    canSpawn: ['retrieval'],
     systemPrompt: 'core', // Uses CORE_PROMPT from lib/prompts/core.ts
-    type: 'conversational',
   },
 
-  /**
-   * IF Decision agent - fast decision on retrieval need.
-   * Gemini Flash for speed and cost.
-   */
-  ifDecision: {
-    id: 'if-decision',
-    name: 'IF Decision',
-    description: 'Fast decision on whether deep retrieval is needed',
-    model: {
-      task: 'decision',
-      quality: 'fast',
-      maxLatencyMs: 500,
-    },
-    tools: [],
-    systemPrompt: IF_DECISION_PROMPT,
-    maxTokens: 100,
-    type: 'decision',
-  },
+  // =========================================================================
+  // BACKGROUND AGENTS (heavy lifting, reports to primary)
+  // =========================================================================
 
   /**
-   * HOW Strategy agent - generates retrieval code.
-   * Claude Sonnet for reasoning capability.
+   * Retrieval agent - deep search and synthesis.
+   * Spawned by Voyager for comprehensive queries.
+   * Reports progress and results via realtime.
    */
-  howStrategy: {
-    id: 'how-strategy',
-    name: 'HOW Strategy',
-    description: 'Generates retrieval strategy as executable code',
-    model: {
-      task: 'synthesis',
-      quality: 'balanced',
-    },
-    tools: [],
-    systemPrompt: HOW_STRATEGY_PROMPT,
-    type: 'decision',
-  },
-
-  /**
-   * Background executor - runs retrieval strategies.
-   * Has access to all retrieval tools.
-   */
-  backgroundExecutor: {
-    id: 'background-executor',
-    name: 'Background Executor',
-    description: 'Executes retrieval strategies with tool access',
+  retrieval: {
+    id: 'retrieval',
+    name: 'Retrieval',
+    description: 'Deep search agent for comprehensive queries',
+    type: 'background',
     model: {
       task: 'chat',
       quality: 'balanced',
@@ -187,26 +195,85 @@ export const AGENT_REGISTRY: Record<string, AgentDefinition> = {
       'get_connected',
       'get_nodes',
       'search_by_time',
+      'web_search',
     ],
-    systemPrompt: '', // Executor runs generated code, no system prompt needed
-    type: 'background',
+    reportsTo: 'voyager',
+    tokenBudget: 50000,
+    systemPrompt: HOW_STRATEGY_PROMPT,
+    timeout: 60000, // 60s for deep work
   },
 
+  // =========================================================================
+  // EVENT AGENTS (triggered by system events)
+  // =========================================================================
+
   /**
-   * Synthesis agent - writes conversational follow-ups.
-   * Same voice as Voyager, summarizes findings.
+   * Curator - learns importance from usage.
+   * Triggered when knowledge is created.
+   * Adjusts importance scores based on citations.
    */
-  synthesis: {
-    id: 'synthesis',
-    name: 'Synthesis',
-    description: 'Synthesizes findings into conversational follow-up',
+  curator: {
+    id: 'curator',
+    name: 'Curator',
+    description: 'Learns importance from citations and usage patterns',
+    type: 'event',
+    model: {
+      task: 'decision',
+      quality: 'fast',
+    },
+    tools: [],
+    trigger: { event: 'knowledge.created' },
+    tokenBudget: 5000,
+    systemPrompt: `You analyze knowledge events and determine importance.
+Look at: citations, recency, user engagement.
+Output: importance_score (0-1), decay_rate, tags.`,
+  },
+
+  // =========================================================================
+  // SCHEDULED AGENTS (cron-triggered)
+  // =========================================================================
+
+  /**
+   * Quartermaster - nightly maintenance.
+   * Runs at 3am daily.
+   * Compaction, optimization, cleanup.
+   */
+  quartermaster: {
+    id: 'quartermaster',
+    name: 'Quartermaster',
+    description: 'Nightly maintenance: compaction, optimization, cleanup',
+    type: 'scheduled',
     model: {
       task: 'synthesis',
       quality: 'balanced',
     },
     tools: [],
+    schedule: '0 3 * * *', // 3am daily
+    tokenBudget: 100000,
+    systemPrompt: `You perform nightly maintenance on the knowledge graph.
+Tasks: identify stale knowledge, suggest compaction, optimize retrieval.`,
+  },
+
+  // =========================================================================
+  // HELPER AGENTS (used internally by other agents)
+  // =========================================================================
+
+  /**
+   * Synthesis agent - writes conversational follow-ups.
+   * Used by retrieval to maintain Voyager's voice.
+   */
+  synthesis: {
+    id: 'synthesis',
+    name: 'Synthesis',
+    description: 'Synthesizes findings into conversational follow-up',
+    type: 'background',
+    model: {
+      task: 'synthesis',
+      quality: 'balanced',
+    },
+    tools: [],
+    reportsTo: 'retrieval',
     systemPrompt: SYNTHESIS_PROMPT,
-    type: 'decision',
   },
 }
 

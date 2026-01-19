@@ -1,12 +1,14 @@
-// Deep Retrieval Agent
-// Runs in parallel via waitUntil to provide "initial results THEN more detail"
+// Deep Retrieval Agent (Background Agent)
 //
-// Architecture:
-// 1. Gemini Flash decides IF retrieval is needed (fast, cheap)
-// 2. If yes, Claude generates retrieval strategy (HOW)
-// 3. Executor runs the strategy code
-// 4. Claude synthesizes findings into conversational follow-up
-// 5. Results surface via Realtime (agent_tasks table)
+// Architecture (new):
+// - Voyager (primary) decides when to spawn via spawn_background_agent tool
+// - Background agent receives objective + context
+// - Generates retrieval strategy (HOW)
+// - Executes strategy, reports progress via realtime
+// - Clusters and synthesizes findings
+// - Results surface via Realtime (agent_tasks table)
+//
+// Legacy: runDeepRetrieval still works for automatic parallel path
 
 import { generateText } from 'ai'
 import { callGemini } from '@/lib/gemini/client'
@@ -15,13 +17,30 @@ import { clusterFindings } from './clustering'
 import { getClientForContext } from '@/lib/supabase/authenticated'
 import type { KnowledgeNode } from '@/lib/knowledge'
 import { modelRouter } from '@/lib/models'
-import { classifySearchDepth, type SearchDepth } from './depth-classifier'
+import { classifySearchDepth } from './depth-classifier'
 import { IF_DECISION_PROMPT, HOW_STRATEGY_PROMPT, SYNTHESIS_PROMPT } from './primitives'
+import { updateTaskProgress } from './queue'
 
 // =============================================================================
 // Types
 // =============================================================================
 
+/**
+ * Input for background retrieval (spawned by Voyager via tool).
+ */
+export interface BackgroundRetrievalInput {
+  taskId: string           // For progress updates
+  objective: string        // What to find
+  context: string          // Conversation context
+  userId: string
+  voyageSlug?: string
+  conversationId: string
+}
+
+/**
+ * Legacy input for automatic deep retrieval.
+ * @deprecated Use BackgroundRetrievalInput for new code
+ */
 export interface DeepRetrievalInput {
   query: string
   conversationId: string
@@ -392,5 +411,130 @@ export async function runDeepRetrieval(input: DeepRetrievalInput): Promise<void>
   } catch (error) {
     console.error('[DeepRetrieval] Failed:', error)
     // Don't throw - this runs in background, shouldn't affect user experience
+  }
+}
+
+// =============================================================================
+// Background Retrieval (New Agent Model)
+// =============================================================================
+
+/**
+ * Generate retrieval strategy from objective.
+ * Claude interprets the objective and generates executable code.
+ */
+async function generateStrategyFromObjective(
+  objective: string,
+  context: string
+): Promise<{ code: string }> {
+  const userPrompt = `Objective: "${objective}"
+
+${context ? `Context from conversation:\n${context}\n` : ''}
+
+Write retrieval code to comprehensively search for information about this objective.
+Use multiple strategies: semantic search, keyword grep, connected nodes, time-based search.
+Return { findings, confidence, summary }.`
+
+  const response = await generateText({
+    model: modelRouter.select({ task: 'synthesis', quality: 'balanced' }),
+    system: HOW_STRATEGY_PROMPT,
+    prompt: userPrompt,
+  })
+
+  // Extract code from response (handle markdown code blocks)
+  let code = response.text.trim()
+  if (code.startsWith('```javascript') || code.startsWith('```js')) {
+    code = code.replace(/^```(?:javascript|js)\n?/, '').replace(/```$/, '')
+  } else if (code.startsWith('```')) {
+    code = code.replace(/^```\n?/, '').replace(/```$/, '')
+  }
+
+  console.log('[BackgroundRetrieval] Generated strategy:', code.slice(0, 200) + '...')
+
+  return { code }
+}
+
+/**
+ * Run background retrieval as a spawned agent.
+ * Called by spawn_background_agent tool.
+ *
+ * Flow:
+ * 1. Generate strategy from objective (HOW)
+ * 2. Execute strategy (with progress updates)
+ * 3. Cluster findings
+ * 4. Synthesize into conversational follow-up
+ * 5. Return result (caller saves to agent_tasks)
+ */
+export async function runBackgroundRetrieval(
+  input: BackgroundRetrievalInput
+): Promise<RetrievalResult> {
+  const { taskId, objective, context, userId, voyageSlug, conversationId } = input
+  const startTime = Date.now()
+
+  console.log('[BackgroundRetrieval] Starting for objective:', objective.slice(0, 50) + '...')
+
+  try {
+    // Step 1: Generate strategy
+    await updateTaskProgress(taskId, { stage: 'analyzing', percent: 10 })
+    const strategy = await generateStrategyFromObjective(objective, context)
+
+    // Step 2: Execute retrieval
+    await updateTaskProgress(taskId, { stage: 'searching', percent: 30 })
+    const findings = await executeRetrievalCode(strategy.code, {
+      userId,
+      voyageSlug,
+      conversationId,
+    })
+
+    console.log('[BackgroundRetrieval] Execution complete:', {
+      findingsCount: findings.findings.length,
+      confidence: findings.confidence,
+    })
+
+    // Skip if no findings
+    if (findings.findings.length === 0) {
+      console.log('[BackgroundRetrieval] No findings')
+      return {
+        findings: [],
+        confidence: 0,
+        summary: 'No relevant information found.',
+      }
+    }
+
+    // Step 3: Cluster findings
+    await updateTaskProgress(taskId, {
+      stage: 'clustering',
+      found: findings.findings.length,
+      percent: 60,
+    })
+    const clustered = await clusterFindings(findings.findings, objective)
+
+    console.log('[BackgroundRetrieval] Clustering complete:', {
+      clusters: clustered.clusters.length,
+      unclustered: clustered.unclustered.length,
+    })
+
+    // Step 4: Synthesize
+    await updateTaskProgress(taskId, {
+      stage: 'synthesizing',
+      found: findings.findings.length,
+      percent: 80,
+    })
+    const synthesis = await synthesizeClusters(clustered, objective, context ? [context] : [])
+
+    console.log('[BackgroundRetrieval] Complete:', {
+      durationMs: Date.now() - startTime,
+      findingsCount: findings.findings.length,
+      clusters: clustered.clusters.length,
+    })
+
+    // Return result (caller will save to agent_tasks)
+    return {
+      findings: findings.findings,
+      confidence: findings.confidence,
+      summary: synthesis || `Found ${findings.findings.length} items organized into ${clustered.clusters.length} themes.`,
+    }
+  } catch (error) {
+    console.error('[BackgroundRetrieval] Failed:', error)
+    throw error // Let caller handle (failTask)
   }
 }

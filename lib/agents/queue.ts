@@ -171,6 +171,41 @@ export async function claimNextTaskSimple(): Promise<AgentTask | null> {
 }
 
 /**
+ * Task progress shape for realtime updates.
+ */
+export interface TaskProgress {
+  stage: 'searching' | 'analyzing' | 'clustering' | 'synthesizing'
+  found?: number
+  processed?: number
+  percent?: number
+}
+
+/**
+ * Update task progress (for realtime UI updates).
+ * Called by background agents to report progress.
+ */
+export async function updateTaskProgress(
+  taskId: string,
+  progress: TaskProgress
+): Promise<void> {
+  const supabase = getAdminClient()
+
+  const { error } = await (supabase as any)
+    .from('agent_tasks')
+    .update({
+      status: 'running',
+      progress,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', taskId)
+
+  if (error) {
+    console.error('[AgentQueue] Failed to update progress:', error)
+    // Don't throw - progress updates are non-critical
+  }
+}
+
+/**
  * Mark a task as complete with results.
  */
 export async function completeTask(

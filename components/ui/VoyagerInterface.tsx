@@ -4,7 +4,7 @@ import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react'
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import { Terminal, Activity, Ship, Users, Link2 } from 'lucide-react';
-import { UserMessage, AssistantMessage, AstronautState, AgentResultCard } from '@/components/chat';
+import { UserMessage, AssistantMessage, AstronautState, AgentResultCard, TaskCard, type TaskProgress } from '@/components/chat';
 import { useAuth } from '@/lib/auth/context';
 import { createClient } from '@/lib/supabase/client';
 import { detectIntent, type UIIntent } from '@/lib/ui/intent';
@@ -79,6 +79,13 @@ interface ResumableConversation {
 
 interface ResumableResponse {
   conversations: ResumableConversation[];
+}
+
+// Running task from background worker (in-progress)
+interface RunningTask {
+  id: string;
+  task: string;  // objective
+  progress?: TaskProgress;
 }
 
 // Agent result from background worker (supports clustered and legacy flat findings)
@@ -166,8 +173,12 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   const [isCreatingVoyage, setIsCreatingVoyage] = useState(false);
   const [voyageInvite, setVoyageInvite] = useState<{ code: string; url: string } | null>(null);
 
-  // Background agent results (Phase 2: Claude as Query Compiler)
+  // Background agent state (running + completed)
+  const [runningTasks, setRunningTasks] = useState<RunningTask[]>([]);
   const [agentResults, setAgentResults] = useState<AgentResult[]>([]);
+
+  // Success celebration state (shows triumph astronaut briefly after response)
+  const [showSuccess, setShowSuccess] = useState(false);
 
   // UI component messages (ephemeral, in-stream)
   const [uiMessages, setUiMessages] = useState<UIComponentMessage[]>([]);
@@ -299,7 +310,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     fetchVoyages();
   }, [isAuthenticated, isAuthLoading]);
 
-  // Subscribe to background agent results (Phase 2)
+  // Subscribe to background agent tasks (running + completed)
   useEffect(() => {
     if (!conversationId || !isAuthenticated) return;
 
@@ -307,6 +318,7 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
 
     const channel = supabase
       .channel(`agents:${conversationId}`)
+      // New tasks (running)
       .on(
         'postgres_changes',
         {
@@ -317,8 +329,20 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
         },
         (payload) => {
           const newData = payload.new as Record<string, unknown>;
-          if (newData.status === 'complete' && newData.result) {
-            log.agent('Deep retrieval result received', { taskId: newData.id });
+          const status = newData.status as string;
+
+          if (status === 'pending' || status === 'running') {
+            log.agent('Background task started', { taskId: newData.id });
+            setRunningTasks((prev) => [
+              ...prev,
+              {
+                id: newData.id as string,
+                task: newData.task as string,
+                progress: newData.progress as TaskProgress | undefined,
+              },
+            ]);
+          } else if (status === 'complete' && newData.result) {
+            log.agent('Background task completed', { taskId: newData.id });
             setAgentResults((prev) => [
               ...prev,
               {
@@ -330,6 +354,50 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
           }
         }
       )
+      // Progress updates
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'agent_tasks',
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        (payload) => {
+          const newData = payload.new as Record<string, unknown>;
+          const taskId = newData.id as string;
+          const status = newData.status as string;
+
+          if (status === 'running') {
+            // Update progress
+            setRunningTasks((prev) =>
+              prev.map((t) =>
+                t.id === taskId
+                  ? { ...t, progress: newData.progress as TaskProgress | undefined }
+                  : t
+              )
+            );
+          } else if (status === 'complete') {
+            // Move from running to completed
+            setRunningTasks((prev) => prev.filter((t) => t.id !== taskId));
+            if (newData.result) {
+              log.agent('Background task completed', { taskId });
+              setAgentResults((prev) => [
+                ...prev,
+                {
+                  id: taskId,
+                  task: newData.task as string,
+                  result: newData.result as AgentResult['result'],
+                },
+              ]);
+            }
+          } else if (status === 'failed') {
+            // Remove from running
+            setRunningTasks((prev) => prev.filter((t) => t.id !== taskId));
+            log.agent('Background task failed', { taskId, error: newData.error });
+          }
+        }
+      )
       .subscribe();
 
     return () => {
@@ -337,14 +405,31 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     };
   }, [conversationId, isAuthenticated]);
 
-  // Clear agent results when conversation changes
+  // Clear agent state when conversation changes
   useEffect(() => {
+    setRunningTasks([]);
     setAgentResults([]);
   }, [conversationId]);
 
   // Derived state for loading
   const isLoading = status === 'submitted' || status === 'streaming';
   const isStreaming = status === 'streaming';
+  const prevStatusRef = useRef(status);
+
+  // Show success astronaut briefly when response completes
+  useEffect(() => {
+    const wasStreaming = prevStatusRef.current === 'streaming';
+    const nowReady = status === 'ready';
+
+    if (wasStreaming && nowReady && messages.length > 0) {
+      // Just finished streaming - celebrate!
+      setShowSuccess(true);
+      const timer = setTimeout(() => setShowSuccess(false), 2500);
+      return () => clearTimeout(timer);
+    }
+
+    prevStatusRef.current = status;
+  }, [status, messages.length]);
 
   // Process queued messages when Voyager finishes responding
   useEffect(() => {
@@ -1222,6 +1307,28 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
           </div>
         )}
 
+        {/* Success celebration (brief triumph after response) */}
+        {showSuccess && !isLoading && (
+          <div className="flex gap-4 animate-in fade-in duration-300">
+            <div className="w-12 pt-1 text-right text-emerald-500/50 text-[10px] font-bold tracking-widest">
+              {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-4">
+                <AstronautState state="success" size="md" />
+                <div className="flex flex-col">
+                  <span className="text-emerald-400 text-xs font-bold">
+                    READY
+                  </span>
+                  <span className="text-slate-600 text-[10px]">
+                    Response complete
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Error state */}
         {error && (
           <div className="flex gap-4">
@@ -1449,7 +1556,21 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
           </div>
         )}
 
-        {/* Agent Results - Background retrieval findings */}
+        {/* Running Tasks - Show progress */}
+        {runningTasks.length > 0 && (
+          <div className="space-y-3 max-w-2xl mx-auto py-4">
+            {runningTasks.map((task) => (
+              <TaskCard
+                key={task.id}
+                id={task.id}
+                objective={task.task}
+                progress={task.progress}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Agent Results - Completed background findings */}
         {agentResults.length > 0 && (
           <div className="space-y-3 max-w-2xl mx-auto py-4">
             {agentResults.map((result) => (

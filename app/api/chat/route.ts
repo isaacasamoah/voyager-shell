@@ -1,4 +1,4 @@
-import { streamText, APICallError } from 'ai';
+import { streamText, stepCountIs, APICallError } from 'ai';
 import { waitUntil } from '@vercel/functions';
 import { composeSystemPrompt, getBasePrompt } from '@/lib/prompts';
 import {
@@ -16,9 +16,8 @@ import {
 import { detectLearningSignal, emitSignal } from '@/lib/learning/signals';
 import { callGeminiJSON } from '@/lib/gemini/client';
 import { emitMessageEvent, type KnowledgeNode } from '@/lib/knowledge';
-import { logRetrievalEvent, logCitations, createRetrievalTools } from '@/lib/retrieval';
+import { logRetrievalEvent, logCitations, createVoyagerTools } from '@/lib/retrieval';
 import { getAuthenticatedUserId } from '@/lib/auth';
-import { runDeepRetrieval } from '@/lib/agents/deep-retrieval';
 import { classifySearchDepth } from '@/lib/agents/depth-classifier';
 import { modelRouter, creditTracker } from '@/lib/models';
 import { log } from '@/lib/debug';
@@ -294,48 +293,28 @@ export const POST = async (req: Request) => {
       systemPrompt += `\n\n[Context: This looks like a broad question. You're searching your memory more thoroughly in the background. Answer naturally with what you know now - if you find more context, you'll share it as a follow-up. Don't mention "deep retrieval" or technical terms - just be natural about it, like "let me think about everything we've discussed..." or "I'm pulling together what I remember..."]`;
     }
 
-    // Create retrieval tools (kept for reference, not currently used)
-    const _retrievalTools = createRetrievalTools({
+    // Create Voyager tools (spawn_background_agent + web_search)
+    const voyagerTools = createVoyagerTools({
       userId,
       voyageSlug,
       conversationId,
       waitUntil,
     });
 
-    // Build conversation context for deep retrieval (from windowed messages)
-    const conversationContext = windowedSimpleMessages
-      .slice(-6)
-      .map((m) => `${m.role}: ${m.content.slice(0, 200)}`);
-
-    // Spawn deep retrieval in parallel (non-blocking)
-    // This implements "initial results THEN more detail when ready"
-    if (conversationId && queryText) {
-      log.agent('Spawning deep retrieval', { conversationId, queryLength: queryText.length });
-      waitUntil(
-        runDeepRetrieval({
-          query: queryText,
-          conversationId,
-          userId,
-          voyageSlug,
-          preRetrievalResults: retrievedKnowledge,
-          conversationContext,
-        })
-      );
-    }
-
-    // Primary Voyager (no retrieval tools - uses pre-fetched context)
-    // Deep retrieval runs in parallel via waitUntil above
-    // Uses windowed messages to stay within token budget
+    // Primary Voyager with tools
+    // Voyager decides when to spawn background agents for deep work
+    // Uses pre-fetched context for fast responses
     const result = streamText({
       model: modelRouter.select({
         task: 'chat',
         quality: 'balanced',
         streaming: true,
+        toolUse: true,
       }),
       system: systemPrompt,
       messages: windowedSimpleMessages,
-      // tools: retrievalTools,  // Disabled - see proposal
-      // maxSteps: 5,
+      tools: voyagerTools,
+      stopWhen: stepCountIs(3), // Allow tool call → result → final response
       onFinish: async ({ text, finishReason, usage }) => {
         log.message('Stream complete', {
           textLength: text?.length ?? 0,

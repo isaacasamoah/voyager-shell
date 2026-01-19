@@ -203,6 +203,8 @@ export {
 // Export retrieval tools for agentic search
 export {
   createRetrievalTools,
+  createVoyagerTools,
   type ToolContext,
   type RetrievalTools,
+  type VoyagerTools,
 } from './tools';

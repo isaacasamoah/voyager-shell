@@ -120,9 +120,14 @@ const searchByTimeSchema = z.object({
 })
 
 const spawnBackgroundAgentSchema = z.object({
-  task: z.string().describe('Human description of what to find'),
-  code: z.string().describe('JavaScript code using retrieval functions'),
+  objective: z.string().describe('What to find or research. Be specific about the topic, time range, or scope.'),
+  context: z.string().optional().describe('Relevant context from the conversation to help guide the search.'),
   priority: z.enum(['low', 'normal', 'high']).optional().default('normal'),
+})
+
+const webSearchSchema = z.object({
+  query: z.string().describe('Search query for the web'),
+  recency: z.enum(['day', 'week', 'month', 'any']).optional().default('any').describe('How recent should results be'),
 })
 
 // =============================================================================
@@ -311,45 +316,21 @@ Returns knowledge from time period, newest first. Supports ISO dates (2024-01-15
   }),
 
   /**
-   * Spawn a background agent for deeper retrieval.
-   * Use when immediate results aren't enough and deeper exploration would help.
-   * Write custom JavaScript code to chain retrieval functions.
-   * Results surface via realtime when ready.
+   * Spawn a background agent for deep retrieval.
+   * Use for comprehensive searches when the user wants everything on a topic.
+   * Results surface via realtime as the agent works.
    */
   spawn_background_agent: tool({
-    description: `Spawn background retrieval with custom code.
-Write JavaScript that uses our retrieval functions to find comprehensive information.
-The code runs async in background. Results surface via realtime when ready.
+    description: `Spawn a background agent for deep work. Use for:
+- Comprehensive searches ("everything about pricing")
+- Multi-topic research spanning time periods
+- When you found something but suspect there's more
 
-Available functions:
-- semanticSearch(query, { limit?, threshold? }) - Conceptual search
-- keywordGrep(pattern, { caseSensitive?, limit? }) - Exact phrase match
-- getConnected(nodeId, { type?, depth? }) - Graph traversal
-- searchByTime(timeframe, { query? }) - Temporal search
-- getNodes(ids) - Fetch by ID
-- dedupe(nodes) - Remove duplicates
-
-Strategy pattern:
-1. Start broad (semanticSearch)
-2. Follow leads (getConnected)
-3. Pinpoint (keywordGrep)
-4. Return { findings: [...], confidence: 0-1 }
-
-Use when:
-- User asks about history/decisions that might have more context
-- Topic spans multiple conversations or time periods
-- You found something but suspect there's more
-
-Example code:
-const broad = await semanticSearch("pricing", { limit: 20 });
-const decisions = await Promise.all(
-  broad.slice(0, 3).map(n => getConnected(n.id, { type: "decision" }))
-);
-const exact = await keywordGrep("$79");
-return { findings: dedupe([...broad, ...decisions.flat(), ...exact]), confidence: 0.85 };`,
+The agent works in the background. Results appear via realtime when ready.
+You should respond immediately with what you know, then the agent's findings will augment your response.`,
     inputSchema: spawnBackgroundAgentSchema,
     execute: async (input) => {
-      const { task, code, priority } = input
+      const { objective, context, priority } = input
 
       // Validate we have a conversation context
       if (!ctx.conversationId) {
@@ -357,10 +338,10 @@ return { findings: dedupe([...broad, ...decisions.flat(), ...exact]), confidence
       }
 
       try {
-        // Enqueue task (for audit trail + cron fallback)
+        // Enqueue task (for audit trail + UI tracking)
         const taskId = await enqueueAgentTask({
-          task,
-          code,
+          task: objective,
+          code: '', // Background agent generates its own strategy
           priority: priority ?? 'normal',
           userId: ctx.userId,
           voyageSlug: ctx.voyageSlug,
@@ -368,12 +349,17 @@ return { findings: dedupe([...broad, ...decisions.flat(), ...exact]), confidence
         })
 
         // Execute immediately via waitUntil (non-blocking)
-        // Results surface via Realtime in ~1-2 seconds
+        // Results surface via Realtime
         if (ctx.waitUntil) {
           const executeTask = async () => {
             const startTime = Date.now()
             try {
-              const result = await executeRetrievalCode(code, {
+              // Import and run the background retrieval agent
+              const { runBackgroundRetrieval } = await import('@/lib/agents/deep-retrieval')
+              const result = await runBackgroundRetrieval({
+                taskId,
+                objective,
+                context: context ?? '',
                 userId: ctx.userId,
                 voyageSlug: ctx.voyageSlug,
                 conversationId: ctx.conversationId!,
@@ -388,13 +374,56 @@ return { findings: dedupe([...broad, ...decisions.flat(), ...exact]), confidence
           ctx.waitUntil(executeTask())
         }
 
-        return `Background agent spawned (${taskId.slice(0, 8)}). Now respond to the user with what you found so far.`
+        return `Background search started for "${objective.slice(0, 50)}...". Respond to the user now - findings will appear when ready.`
       } catch (error) {
         console.error('[spawn_background_agent] Failed to enqueue:', error)
         return `Failed to spawn background agent: ${error instanceof Error ? error.message : 'Unknown error'}`
       }
     },
   }),
+
+  /**
+   * Search the web for current information.
+   * Use for fact-checking, current events, external validation.
+   */
+  web_search: tool({
+    description: `Search the web for current information. Use for:
+- Fact-checking claims ("Is React 19 out?")
+- Current events ("What's the latest on...")
+- External validation ("What do experts say about...")
+- Competitor research, market info
+
+Returns formatted search results. You synthesize into your response.`,
+    inputSchema: webSearchSchema,
+    execute: async (input) => {
+      const { query, recency } = input
+
+      console.log(`[web_search] Query: "${query}", Recency: ${recency}`)
+
+      // Use Tavily for real web search
+      const { searchWeb, formatSearchResults } = await import('@/lib/search/tavily')
+      const { answer, results, error } = await searchWeb(query, { recency })
+
+      if (error) {
+        return `Web search unavailable: ${error}`
+      }
+
+      return formatSearchResults(results, answer)
+    },
+  }),
+})
+
+// =============================================================================
+// Voyager Tools (Primary Agent)
+// =============================================================================
+
+/**
+ * Creates tools for the primary Voyager agent.
+ * Only spawn_background_agent and web_search - minimal toolset.
+ */
+export const createVoyagerTools = (ctx: ToolContext) => ({
+  spawn_background_agent: createRetrievalTools(ctx).spawn_background_agent,
+  web_search: createRetrievalTools(ctx).web_search,
 })
 
 // =============================================================================
@@ -402,3 +431,4 @@ return { findings: dedupe([...broad, ...decisions.flat(), ...exact]), confidence
 // =============================================================================
 
 export type RetrievalTools = ReturnType<typeof createRetrievalTools>
+export type VoyagerTools = ReturnType<typeof createVoyagerTools>
