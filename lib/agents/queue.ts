@@ -320,3 +320,37 @@ export async function getPendingCount(): Promise<number> {
 
   return count ?? 0
 }
+
+/**
+ * Get a single task by ID.
+ * Used for followup generation when background task completes.
+ */
+export async function getTaskById(taskId: string): Promise<AgentTask | null> {
+  const supabase = getAdminClient()
+
+  const { data, error } = await (supabase as any)
+    .from('agent_tasks')
+    .select('*')
+    .eq('id', taskId)
+    .single()
+
+  if (error || !data) {
+    console.error('[AgentQueue] Failed to get task by ID:', error)
+    return null
+  }
+
+  return {
+    id: data.id as string,
+    task: data.task as string,
+    code: data.code as string,
+    priority: data.priority as 'low' | 'normal' | 'high',
+    userId: data.user_id as string,
+    voyageSlug: data.voyage_slug as string | undefined,
+    conversationId: data.conversation_id as string,
+    status: data.status as AgentTask['status'],
+    result: data.result as RetrievalResult | undefined,
+    error: data.error as string | undefined,
+    durationMs: data.duration_ms as number | undefined,
+    createdAt: new Date(data.created_at as string),
+  }
+}

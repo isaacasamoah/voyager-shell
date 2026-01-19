@@ -11,6 +11,9 @@ export * from './types';
 // Re-export core prompt
 export { CORE_PROMPT, CORE_PROMPT_TOKENS } from './core';
 
+// Re-export followup prompts
+export { composeFollowupPrompt, formatCompletedTaskForFollowup } from './followup';
+
 // Re-export defaults
 export {
   DEFAULT_VOYAGE_CONFIG,

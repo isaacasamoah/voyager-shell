@@ -180,6 +180,10 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
   // Success celebration state (shows triumph astronaut briefly after response)
   const [showSuccess, setShowSuccess] = useState(false);
 
+  // Followup state (for background agent → Voyager push-based communication)
+  const [followupInProgress, setFollowupInProgress] = useState(false);
+  const triggerFollowupRef = useRef<(taskId: string) => void>(() => {});
+
   // UI component messages (ephemeral, in-stream)
   const [uiMessages, setUiMessages] = useState<UIComponentMessage[]>([]);
 
@@ -390,6 +394,9 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
                   result: newData.result as AgentResult['result'],
                 },
               ]);
+
+              // Trigger Voyager followup (push-based communication)
+              triggerFollowupRef.current(taskId);
             }
           } else if (status === 'failed') {
             // Remove from running
@@ -1093,6 +1100,106 @@ export const VoyagerInterface = ({ className }: VoyagerInterfaceProps) => {
     }
     // Add more action handlers as needed
   }, [handleVoyagePickerSelect]);
+
+  // Stream followup response into messages
+  const streamFollowupIntoMessages = useCallback(async (stream: ReadableStream) => {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+
+    // Create placeholder message
+    const messageId = `followup-${Date.now()}`;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: messageId,
+        role: 'assistant' as const,
+        parts: [{ type: 'text' as const, text: '' }],
+      },
+    ]);
+
+    // Stream content
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        // Parse AI SDK SSE format: lines starting with "0:" contain text
+        const lines = chunk.split('\n');
+        for (const line of lines) {
+          const textMatch = line.match(/^0:"(.*)"/);
+          if (textMatch) {
+            // Unescape the JSON string content
+            const content = textMatch[1]
+              .replace(/\\n/g, '\n')
+              .replace(/\\"/g, '"')
+              .replace(/\\\\/g, '\\');
+            fullText += content;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === messageId
+                  ? { ...m, parts: [{ type: 'text' as const, text: fullText }] }
+                  : m
+              )
+            );
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    // Trigger success state
+    if (fullText.length > 0) {
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 2500);
+    }
+  }, [setMessages]);
+
+  // Trigger Voyager followup when background task completes
+  const triggerFollowup = useCallback(
+    async (taskId: string) => {
+      // Guard: don't interrupt active chat or another followup
+      if (status === 'streaming' || status === 'submitted' || followupInProgress) {
+        log.agent('Followup deferred - chat busy', { taskId, status, followupInProgress });
+        return;
+      }
+
+      if (!conversationId) {
+        log.agent('Followup skipped - no conversationId', { taskId });
+        return;
+      }
+
+      setFollowupInProgress(true);
+      log.agent('Triggering followup', { taskId, conversationId });
+
+      try {
+        const response = await fetch('/api/chat/followup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conversationId, taskId }),
+        });
+
+        if (!response.ok || !response.body) {
+          throw new Error(`Followup request failed: ${response.status}`);
+        }
+
+        // Stream response into messages
+        await streamFollowupIntoMessages(response.body);
+      } catch (error) {
+        log.agent('Followup failed', { error: String(error) }, 'error');
+      } finally {
+        setFollowupInProgress(false);
+      }
+    },
+    [conversationId, status, followupInProgress, streamFollowupIntoMessages]
+  );
+
+  // Keep ref updated so realtime handler always has latest function
+  useEffect(() => {
+    triggerFollowupRef.current = triggerFollowup;
+  }, [triggerFollowup]);
 
   return (
     <div className={`min-h-screen bg-[#050505] text-slate-300 font-mono text-sm selection:bg-indigo-500/30 overflow-x-hidden relative ${className || ''}`}>
