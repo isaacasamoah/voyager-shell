@@ -12,6 +12,7 @@ import {
   getKnowledgeByIds,
   type KnowledgeNode,
 } from '@/lib/knowledge'
+import { log } from '@/lib/debug'
 
 // =============================================================================
 // Types
@@ -95,6 +96,7 @@ const createBoundFunctions = (ctx: ExecutionContext) => ({
     topicClusters: string[]
     voyages: string[]
   }> => {
+    log.agent('[Executor:getKnowledgeStats] Calling')
     const { getClientForContext } = await import('@/lib/supabase/authenticated')
     const supabase = getClientForContext({ userId: ctx.userId })
 
@@ -129,12 +131,14 @@ const createBoundFunctions = (ctx: ExecutionContext) => ({
     const oldest = data.length > 0 ? data[data.length - 1].source_created_at : null
     const newest = data.length > 0 ? data[0].source_created_at : null
 
-    return {
+    const result = {
       count: count ?? data.length,
       dateRange: oldest && newest ? { oldest, newest } : null,
       topicClusters: Array.from(topicsSet).slice(0, 20), // Top 20 topics
       voyages: Array.from(voyagesSet),
     }
+    log.agent('[Executor:getKnowledgeStats] Result', result)
+    return result
   },
 
   /**
@@ -145,6 +149,7 @@ const createBoundFunctions = (ctx: ExecutionContext) => ({
     limit?: number
     since?: string
   }): Promise<KnowledgeNode[]> => {
+    log.agent('[Executor:getScopeDump] Calling', { opts })
     const { getClientForContext } = await import('@/lib/supabase/authenticated')
     const supabase = getClientForContext({ userId: ctx.userId })
     const limit = opts?.limit ?? 100
@@ -176,7 +181,7 @@ const createBoundFunctions = (ctx: ExecutionContext) => ({
       return []
     }
 
-    return data.map((row: Record<string, unknown>) => ({
+    const results = data.map((row: Record<string, unknown>) => ({
       eventId: row.event_id as string,
       content: row.content as string,
       classifications: (row.classifications as string[]) ?? [],
@@ -188,6 +193,8 @@ const createBoundFunctions = (ctx: ExecutionContext) => ({
       connectedTo: (row.connected_to as string[]) ?? [],
       createdAt: new Date(row.source_created_at as string),
     }))
+    log.agent('[Executor:getScopeDump] Results', { count: results.length })
+    return results
   },
 
   // =========================================================================
@@ -201,11 +208,14 @@ const createBoundFunctions = (ctx: ExecutionContext) => ({
     query: string,
     opts?: { limit?: number; threshold?: number }
   ): Promise<KnowledgeNode[]> => {
-    return searchKnowledge(ctx.userId, query, {
+    log.agent('[Executor:semanticSearch] Calling', { query: query.slice(0, 50), opts })
+    const results = await searchKnowledge(ctx.userId, query, {
       limit: opts?.limit ?? 10,
       threshold: opts?.threshold ?? 0.6,
       voyageSlug: ctx.voyageSlug,
     })
+    log.agent('[Executor:semanticSearch] Results', { count: results.length })
+    return results
   },
 
   /**
@@ -354,6 +364,12 @@ export async function executeRetrievalCode(
   code: string,
   ctx: ExecutionContext
 ): Promise<RetrievalResult> {
+  log.agent('[Executor] Starting code execution', {
+    codeLength: code.length,
+    userId: ctx.userId.slice(0, 8),
+    voyageSlug: ctx.voyageSlug,
+  })
+
   const boundFunctions = createBoundFunctions(ctx)
 
   // Construct function with bound retrieval tools
@@ -368,9 +384,11 @@ export async function executeRetrievalCode(
   if (functionDefMatch && !code.includes(`${functionDefMatch[1]}(`)) {
     // Function defined but never called - add the call
     const funcName = functionDefMatch[1]
-    console.log(`[Executor] Auto-calling function: ${funcName}()`)
+    log.agent(`[Executor] Auto-calling function: ${funcName}()`)
     processedCode = `${code}\nreturn await ${funcName}();`
   }
+
+  log.agent('[Executor] Processed code', { preview: processedCode.slice(0, 500) })
 
   let fn: (...args: unknown[]) => Promise<unknown>
   try {
@@ -394,15 +412,32 @@ export async function executeRetrievalCode(
 
   let result: unknown
   try {
+    log.agent('[Executor] Executing code...')
+    const execStart = Date.now()
     result = await Promise.race([fn(...functionValues), timeoutPromise])
+    log.agent(`[Executor] Code executed in ${Date.now() - execStart}ms`, {
+      resultType: typeof result,
+      isArray: Array.isArray(result),
+      resultPreview: JSON.stringify(result)?.slice(0, 300),
+    })
   } catch (error) {
+    log.agent('[Executor] Code execution failed', {
+      error: error instanceof Error ? error.message : String(error),
+      code: processedCode.slice(0, 500),
+    }, 'error')
     throw new Error(
       `Retrieval code execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`
     )
   }
 
   // Validate and normalize result
-  return normalizeResult(result)
+  const normalized = normalizeResult(result)
+  log.agent('[Executor] Result normalized', {
+    findingsCount: normalized.findings.length,
+    confidence: normalized.confidence,
+    summary: normalized.summary?.slice(0, 100),
+  })
+  return normalized
 }
 
 /**

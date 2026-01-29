@@ -20,6 +20,7 @@ import { modelRouter } from '@/lib/models'
 import { classifySearchDepth } from './depth-classifier'
 import { IF_DECISION_PROMPT, HOW_STRATEGY_PROMPT, SYNTHESIS_PROMPT } from './primitives'
 import { updateTaskProgress } from './queue'
+import { log } from '@/lib/debug'
 
 // =============================================================================
 // Types
@@ -469,30 +470,47 @@ export async function runBackgroundRetrieval(
 ): Promise<RetrievalResult> {
   const { taskId, objective, context, userId, voyageSlug, conversationId } = input
   const startTime = Date.now()
+  const shortTaskId = taskId.slice(0, 8)
 
-  console.log('[BackgroundRetrieval] Starting for objective:', objective.slice(0, 50) + '...')
+  log.agent(`[${shortTaskId}] === BACKGROUND RETRIEVAL START ===`, {
+    objective: objective.slice(0, 100),
+    context: context?.slice(0, 100),
+    userId: userId.slice(0, 8),
+    voyageSlug,
+    conversationId: conversationId.slice(0, 8),
+  })
 
   try {
     // Step 1: Generate strategy
+    log.agent(`[${shortTaskId}] Step 1: Generating strategy...`)
     await updateTaskProgress(taskId, { stage: 'analyzing', percent: 10 })
+    const strategyStart = Date.now()
     const strategy = await generateStrategyFromObjective(objective, context)
+    log.agent(`[${shortTaskId}] Strategy generated in ${Date.now() - strategyStart}ms`, {
+      codeLength: strategy.code.length,
+      codePreview: strategy.code.slice(0, 300),
+    })
 
     // Step 2: Execute retrieval
+    log.agent(`[${shortTaskId}] Step 2: Executing retrieval code...`)
     await updateTaskProgress(taskId, { stage: 'searching', percent: 30 })
+    const execStart = Date.now()
     const findings = await executeRetrievalCode(strategy.code, {
       userId,
       voyageSlug,
       conversationId,
     })
 
-    console.log('[BackgroundRetrieval] Execution complete:', {
+    log.agent(`[${shortTaskId}] Execution complete in ${Date.now() - execStart}ms`, {
       findingsCount: findings.findings.length,
       confidence: findings.confidence,
+      summary: findings.summary?.slice(0, 100),
+      firstFinding: findings.findings[0]?.content.slice(0, 100),
     })
 
     // Skip if no findings
     if (findings.findings.length === 0) {
-      console.log('[BackgroundRetrieval] No findings')
+      log.agent(`[${shortTaskId}] No findings - returning empty`, {}, 'warn')
       return {
         findings: [],
         confidence: 0,
@@ -501,30 +519,37 @@ export async function runBackgroundRetrieval(
     }
 
     // Step 3: Cluster findings
+    log.agent(`[${shortTaskId}] Step 3: Clustering ${findings.findings.length} findings...`)
     await updateTaskProgress(taskId, {
       stage: 'clustering',
       found: findings.findings.length,
       percent: 60,
     })
+    const clusterStart = Date.now()
     const clustered = await clusterFindings(findings.findings, objective)
 
-    console.log('[BackgroundRetrieval] Clustering complete:', {
+    log.agent(`[${shortTaskId}] Clustering complete in ${Date.now() - clusterStart}ms`, {
       clusters: clustered.clusters.length,
       unclustered: clustered.unclustered.length,
+      method: clustered.clusteringMethod,
     })
 
     // Step 4: Synthesize
+    log.agent(`[${shortTaskId}] Step 4: Synthesizing...`)
     await updateTaskProgress(taskId, {
       stage: 'synthesizing',
       found: findings.findings.length,
       percent: 80,
     })
+    const synthStart = Date.now()
     const synthesis = await synthesizeClusters(clustered, objective, context ? [context] : [])
 
-    console.log('[BackgroundRetrieval] Complete:', {
-      durationMs: Date.now() - startTime,
+    log.agent(`[${shortTaskId}] === BACKGROUND RETRIEVAL COMPLETE ===`, {
+      totalDurationMs: Date.now() - startTime,
       findingsCount: findings.findings.length,
       clusters: clustered.clusters.length,
+      synthesisDurationMs: Date.now() - synthStart,
+      synthesisPreview: synthesis?.slice(0, 200),
     })
 
     // Return result (caller will save to agent_tasks)
@@ -534,7 +559,11 @@ export async function runBackgroundRetrieval(
       summary: synthesis || `Found ${findings.findings.length} items organized into ${clustered.clusters.length} themes.`,
     }
   } catch (error) {
-    console.error('[BackgroundRetrieval] Failed:', error)
+    log.agent(`[${shortTaskId}] === BACKGROUND RETRIEVAL FAILED ===`, {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack?.slice(0, 500) : undefined,
+      durationMs: Date.now() - startTime,
+    }, 'error')
     throw error // Let caller handle (failTask)
   }
 }

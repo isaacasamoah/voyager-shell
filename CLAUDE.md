@@ -2,6 +2,15 @@
 
 Project context for Claude. Read this first.
 
+## Active Proposals
+
+<!-- Remove this section once addressed -->
+**[Architecture Proposal: Voyager as Protocol](~/.claude/diary/branches/voyager-zero/main.md#2026-01-23---architecture-proposal-voyager-as-protocol)**
+
+Captured 2026-01-23. Deep architectural thinking: Rust core, Lua extensions, CRDTs for local-first, protocol-not-product philosophy. Read the diary entry and discuss with Isaac before implementing anything major.
+
+---
+
 ## What is Voyager?
 
 Your AI co-pilot for life and work. Not a chatbot - an intelligence that:
